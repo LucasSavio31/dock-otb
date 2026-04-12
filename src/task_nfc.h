@@ -1,38 +1,38 @@
 #pragma once
-// =============================================================================
-// task_nfc.h — v3.1
-//
-// PN532 único via SPI, CS no D13.
-// Fix V3 mantido: após SerialCmd, reseta ultimoPollMs, zera lastUidLen
-// e aguarda POST_CMD_DELAY_MS para evitar race condition no display.
-//
-// Pinagem:
-//   SCK  → D18    MISO → D19    MOSI → D23    CS → D13
-// =============================================================================
+// =============================================================
+//  task_nfc.h — V5
+//  PN532 via SPI
+//  SCK=D18  MISO=D19  MOSI=D23  CS=D13
+//  Roda no Core 0, prioridade 3
+// =============================================================
 #include "shared.h"
 #include <SPI.h>
+#include <Wire.h>
 #include <Adafruit_PN532.h>
 
-// =============================================================================
-// INSTÂNCIA PN532  — SPI, CS = D13
-// =============================================================================
+// ── Pinos SPI ─────────────────────────────────────────────────
+#define NFC_SCK   18
+#define NFC_MISO  19
+#define NFC_MOSI  23
+#define NFC_CS    13
+
+// Instância SPI (CS, SCK, MISO, MOSI)
 static Adafruit_PN532 nfc(NFC_CS, &SPI);
 
-// =============================================================================
+// =========================
 // CONSTANTES
-// =============================================================================
-static const uint32_t POLL_INTERVAL_MS  = 150;
-static const uint32_t TAG_TIMEOUT_MS    = 700;
-static const uint32_t POST_CMD_DELAY_MS = 300;  // fix V3: pausa pós-comando
+// =========================
+static const uint32_t POLL_INTERVAL_MS = 150;
+static const uint32_t TAG_TIMEOUT_MS   = 700;
 
-// =============================================================================
+// =========================
 // HELPERS NTAG
 // Layout:
 //   page 4     → vida(lo/hi), ciclos(lo/hi)
 //   page 5     → status
 //   page 6-9   → serial (16 bytes)
-//   page 10-13 → id     (16 bytes)
-// =============================================================================
+//   page 10-13 → id (16 bytes)
+// =========================
 static bool _readPage(uint8_t page, uint8_t *out4) {
   uint8_t buf[32];
   if (!nfc.ntag2xx_ReadPage(page, buf)) return false;
@@ -85,7 +85,6 @@ static bool _gravarTag(const TagData &d) {
     memcpy(p, &buf[i * 4], 4);
     if (!_writePage(6 + i, p)) return false;
   }
-
   memset(buf, 0, 16);
   strncpy(buf, d.id, 16);
   for (int i = 0; i < 4; i++) {
@@ -105,9 +104,9 @@ static bool _resetarTag() {
   return _gravarTag(d);
 }
 
-// =============================================================================
-// PUBLICAR EVENTO
-// =============================================================================
+// =========================
+// PUBLICA evento
+// =========================
 static void _publicarEvento(TagEvent::Type type, const TagData *data = nullptr,
                             const uint8_t *uid = nullptr, uint8_t uidLen = 0) {
   TagEvent ev{};
@@ -144,37 +143,48 @@ static void _publicarEvento(TagEvent::Type type, const TagData *data = nullptr,
                      type == TagEvent::TAG_ERRO);
 
   xQueueOverwrite(qTagData, &ev);
-
-  if (ehResposta) {
-    xQueueOverwrite(qSerialResp, &ev);
-  }
+  if (ehResposta) xQueueOverwrite(qSerialResp, &ev);
 }
 
-// =============================================================================
-// TASK NFC
-// Roda no Core 0, prioridade 3
-// =============================================================================
+// =========================
+// TASK NFC — Core 0, prioridade 3
+// =========================
 void taskNFC(void *param) {
+  // Inicia SPI com os pinos corretos
+  SPI.begin(NFC_SCK, NFC_MISO, NFC_MOSI);
 
-  // CS em HIGH antes de inicializar o SPI
   pinMode(NFC_CS, OUTPUT);
   digitalWrite(NFC_CS, HIGH);
 
-  SPI.begin(SPI_SCK, SPI_MISO, SPI_MOSI);
-  vTaskDelay(pdMS_TO_TICKS(100));
+  // ── Verifica TCA9548A via I2C ──────────────────────────
+  Wire.begin(SDA_PIN, SCL_PIN);
+  Wire.setClock(100000);
+  Wire.beginTransmission(TCA_ADDR);
+  uint8_t tcaErr = Wire.endTransmission();
+  if (tcaErr == 0) {
+    Serial.println("[NFC] TCA9548A (0x70): ONLINE");
+  } else {
+    Serial.printf("[NFC] TCA9548A (0x70): OFFLINE (err=%d)\n", tcaErr);
+    Serial.println("[NFC] Verifique SDA=D21 SCL=D22 e pull-ups 4.7k");
+  }
 
   nfc.begin();
+
   uint32_t fw = nfc.getFirmwareVersion();
   if (!fw) {
-    Serial.println("[NFC] ERRO: PN532 nao encontrado (CS=D13).");
+    Serial.println("[NFC] ERRO: PN532 nao encontrado via SPI.");
+    Serial.println("[NFC] Verifique: SCK=D18 MISO=D19 MOSI=D23 CS=D13");
     while (true) {
       digitalWrite(LED2, !digitalRead(LED2));
       vTaskDelay(pdMS_TO_TICKS(200));
     }
   }
+
+  Serial.printf("[NFC] PN532 OK — FW: %d.%d\n",
+                (fw >> 16) & 0xFF, (fw >> 8) & 0xFF);
+
   nfc.SAMConfig();
-  Serial.printf("[NFC] PN532 OK — FW: %d.%d  CS=D%d\n",
-                (fw >> 16) & 0xFF, (fw >> 8) & 0xFF, NFC_CS);
+  Serial.println("[NFC] Pronto. Aguardando tag...");
 
   uint8_t  lastUid[7] = {0};
   uint8_t  lastUidLen = 0;
@@ -185,7 +195,7 @@ void taskNFC(void *param) {
   for (;;) {
     uint32_t now = millis();
 
-    // --- Processar comandos da taskSerial ---
+    // ── Comandos da taskSerial ─────────────────────────────
     SerialCmd cmd;
     if (xQueueReceive(qSerialCmd, &cmd, 0) == pdTRUE) {
       if (tagPresente) {
@@ -217,31 +227,27 @@ void taskNFC(void *param) {
             break;
           }
         }
-
-        // Fix V3: pausa pós-comando para taskNextion consumir o evento
-        // correto antes que o poll sobrescreva qTagData com cache antigo.
+        // Fix V3: reset timers após comando para evitar race condition
         ultimoPollMs = millis();
         lastUidLen   = 0;
-        vTaskDelay(pdMS_TO_TICKS(POST_CMD_DELAY_MS));
-        continue;
       }
     }
 
-    // --- Throttle de polling ---
+    // ── Throttle de polling ────────────────────────────────
     if (now - ultimoPollMs < POLL_INTERVAL_MS) {
       vTaskDelay(pdMS_TO_TICKS(10));
       continue;
     }
     ultimoPollMs = now;
 
-    // --- Detectar tag ---
+    // ── Detecta tag ───────────────────────────────────────
     uint8_t uid[7];
     uint8_t uidLen = 0;
     bool detectou = nfc.readPassiveTargetID(PN532_MIFARE_ISO14443A, uid, &uidLen, 50);
 
     if (detectou) {
       ultimoDetectMs = now;
-      bool mesmaTag = (uidLen == lastUidLen && memcmp(uid, lastUid, uidLen) == 0);
+      bool mesmaTag  = (uidLen == lastUidLen && memcmp(uid, lastUid, uidLen) == 0);
 
       if (!tagPresente || !mesmaTag) {
         memcpy(lastUid, uid, uidLen);
@@ -254,11 +260,10 @@ void taskNFC(void *param) {
         bool ok = _lerTag(d);
         _publicarEvento(TagEvent::TAG_PRESENTE, ok ? &d : nullptr, uid, uidLen);
 
-        Serial.print("[NFC] Tag detectada UID: ");
+        Serial.print("[NFC] Tag UID: ");
         for (uint8_t i = 0; i < uidLen; i++) {
           if (uid[i] < 0x10) Serial.print("0");
-          Serial.print(uid[i], HEX);
-          Serial.print(" ");
+          Serial.print(uid[i], HEX); Serial.print(" ");
         }
         Serial.println();
       }

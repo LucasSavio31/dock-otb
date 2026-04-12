@@ -33,7 +33,7 @@ static String _statusTexto(uint8_t s) {
 
 static void _nextionLimpar() {
   _setText("IdCart1",     "---");
-  _setText("StatusCart1", "Sem tag");
+  _setText("StatusCart1", "Sem cartucho");
   _setText("CiclosCart1", "---");
   _setText("VidaCart1",   "---");
   _setText("SerialCart1", "---");
