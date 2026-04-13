@@ -102,5 +102,6 @@ struct TagState {
   bool     presente    = false;
   bool     cacheValido = false;
   TagData  cache       = {};
+  bool     nfcOk       = false;  // PN532 inicializou com sucesso
 };
 extern TagState gTag;

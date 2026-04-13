@@ -184,7 +184,14 @@ void taskNFC(void *param) {
                 (fw >> 16) & 0xFF, (fw >> 8) & 0xFF);
 
   nfc.SAMConfig();
-  Serial.println("[NFC] Pronto. Aguardando tag...");
+
+  // Sinaliza que NFC iniciou com sucesso
+  if (xSemaphoreTake(mutexTag, pdMS_TO_TICKS(100)) == pdTRUE) {
+    gTag.nfcOk = true;
+    xSemaphoreGive(mutexTag);
+  }
+
+  Serial.println("[NFC] Pronto. Aguardando cartucho...");
 
   uint8_t  lastUid[7] = {0};
   uint8_t  lastUidLen = 0;
@@ -256,9 +263,16 @@ void taskNFC(void *param) {
         digitalWrite(LED2, HIGH);
         xTaskNotify(hTaskLED, 1, eSetValueWithOverwrite);
 
+        // Tenta ler até 3x com pequeno delay entre tentativas
+        // Evita dados zerados por timing na primeira detecção
         TagData d;
-        bool ok = _lerTag(d);
+        bool ok = false;
+        for (uint8_t tentativa = 0; tentativa < 3 && !ok; tentativa++) {
+          if (tentativa > 0) vTaskDelay(pdMS_TO_TICKS(50));
+          ok = _lerTag(d);
+        }
         _publicarEvento(TagEvent::TAG_PRESENTE, ok ? &d : nullptr, uid, uidLen);
+        if (!ok) Serial.println("[NFC] Aviso: leitura inicial falhou, aguardando CMD_LER");
 
         Serial.print("[NFC] Tag UID: ");
         for (uint8_t i = 0; i < uidLen; i++) {
