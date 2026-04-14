@@ -10,15 +10,18 @@
 #include "task_serial.h"
 #include "task_led.h"
 #include "task_controle.h"
+#include "task_sensor.h"
 
 QueueHandle_t     qTagData     = nullptr;
 QueueHandle_t     qSerialCmd   = nullptr;
 QueueHandle_t     qSerialResp  = nullptr;
 QueueHandle_t     qControleCmd = nullptr;
 SemaphoreHandle_t mutexTag     = nullptr;
+SemaphoreHandle_t mutexNivel   = nullptr;
 TaskHandle_t      hTaskLED     = nullptr;
 
-TagState gTag;
+TagState   gTag;
+NivelState gNivel;
 
 void setup() {
   Serial.begin(115200);
@@ -33,15 +36,18 @@ void setup() {
   qSerialResp  = xQueueCreate(1, sizeof(TagEvent));
   qControleCmd = xQueueCreate(8, sizeof(ControleCmd));
   mutexTag     = xSemaphoreCreateMutex();
+  mutexNivel   = xSemaphoreCreateMutex();
 
   configASSERT(qTagData);
   configASSERT(qSerialCmd);
   configASSERT(qSerialResp);
   configASSERT(qControleCmd);
   configASSERT(mutexTag);
+  configASSERT(mutexNivel);
 
-  // Core 0 — NFC (protocolo I2C isolado)
+  // Core 0 — NFC + Sensor (protocolo I2C isolado)
   xTaskCreatePinnedToCore(taskNFC,      "NFC",      4096, nullptr, 3, nullptr,   0);
+  xTaskCreatePinnedToCore(taskSensor,   "Sensor",   3072, nullptr, 2, nullptr,   0);
 
   // Core 1 — interface e controle
   xTaskCreatePinnedToCore(taskSerial,   "Serial",   4096, nullptr, 2, nullptr,   1);
@@ -49,7 +55,7 @@ void setup() {
   xTaskCreatePinnedToCore(taskControle, "Controle", 2048, nullptr, 2, nullptr,   1);
   xTaskCreatePinnedToCore(taskLED,      "LED",      1024, nullptr, 1, &hTaskLED, 1);
 
-  Serial.println("[Main] V5 iniciado — 5 tasks ativas.");
+  Serial.println("[Main] V5 iniciado — 6 tasks ativas.");
 }
 
 void loop() {

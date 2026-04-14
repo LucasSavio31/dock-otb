@@ -102,20 +102,48 @@ void taskNextion(void *param) {
   _nextionLimpar();
   Serial.println("[Nextion] Pronto.");
 
-  // Controla reenvio periódico da imagem
-  bool     hwOk         = _verificarHardware();
+  // dock_status é a página 10 conforme mapeamento HMI
+  // Só envia p0.pic=2 quando estiver nessa página
+  const uint8_t PAGE_DOCK_STATUS = 10;
+
+  bool     hwOk          = _verificarHardware();
   uint32_t ultimoRefresh = 0;
+  uint8_t  paginaAtual   = 0xFF;
 
   TagEvent ev;
   for (;;) {
-    // ── Reenvio periódico da imagem a cada 3s ──────────────
-    // Garante que a imagem aparece mesmo quando o timer do
-    // Nextion navega para dock_status sem passar pelo ESP32
-    if (hwOk && millis() - ultimoRefresh >= 3000) {
+    // ── Lê página atual do Nextion ─────────────────────────
+    // Envia "sendme" e lê a resposta (0x66 + page + 0xFF 0xFF 0xFF)
+    if (millis() - ultimoRefresh >= 2000) {
       ultimoRefresh = millis();
-      _nextionCmd("vaClicks.val=0");
-      _nextionCmd("tmClick.en=0");
-      _nextionCmd("p0.pic=2");
+
+      // Solicita página atual
+      _nextionCmd("sendme");
+      vTaskDelay(pdMS_TO_TICKS(50));
+
+      // Lê resposta do Nextion
+      if (Serial2.available() >= 4) {
+        uint8_t buf[8] = {0};
+        uint8_t idx = 0;
+        uint32_t t = millis();
+        while (millis() - t < 30 && idx < 8) {
+          if (Serial2.available()) buf[idx++] = Serial2.read();
+        }
+        // Resposta: 0x66 [page] 0xFF 0xFF 0xFF
+        for (uint8_t i = 0; i < idx; i++) {
+          if (buf[i] == 0x66 && i + 1 < idx) {
+            paginaAtual = buf[i + 1];
+            break;
+          }
+        }
+      }
+
+      // Só envia imagem se estiver na tela dock_status
+      if (hwOk && paginaAtual == PAGE_DOCK_STATUS) {
+        _nextionCmd("vaClicks.val=0");
+        _nextionCmd("tmClick.en=0");
+        _nextionCmd("p0.pic=2");
+      }
     }
 
     // ── Eventos de tag ────────────────────────────────────

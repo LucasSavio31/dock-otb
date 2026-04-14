@@ -1,4 +1,5 @@
 #pragma once
+#include <Wire.h>
 // =============================================================
 //  task_serial.h — V5
 //  Menu NFC original + comandos de controle:
@@ -37,6 +38,7 @@ static void _mostrarMenu() {
   Serial.println("b0-100  → Bomba duty % (ex: b75)");
   Serial.println("v1on/v1off | v2on/v2off | v3on/v3off");
   Serial.println("diag    → Diagnostico");
+  Serial.println("sensor  → Leituras FDC1004 (RAW + pF)");
   Serial.print("> ");
 }
 
@@ -132,6 +134,36 @@ static bool _processarComandoControle(const String &op) {
   if (op == "v2off") { _enviarControle(ControleCmd::VALVULA_OFF, 2); Serial.println(">> Valvula 2 DESLIGADA"); return true; }
   if (op == "v3on")  { _enviarControle(ControleCmd::VALVULA_ON,  3); Serial.println(">> Valvula 3 LIGADA");    return true; }
   if (op == "v3off") { _enviarControle(ControleCmd::VALVULA_OFF, 3); Serial.println(">> Valvula 3 DESLIGADA"); return true; }
+  // Sensor FDC1004
+  if (op == "sensor") {
+    Serial.println("\n=== FDC1004 LEITURA CONTINUA ===");
+    Serial.println("Pressione ENTER para sair");
+    Serial.println("RAW           pF");
+    Serial.println("-----------   ----------");
+    while (true) {
+      // Verifica ENTER para sair
+      if (Serial.available()) {
+        char c = Serial.read();
+        if (c == '\n' || c == '\r') break;
+      }
+      // Lê dados do sensor
+      if (xSemaphoreTake(mutexNivel, pdMS_TO_TICKS(50)) == pdTRUE) {
+        int32_t raw = gNivel.rawAtual;
+        float   pf  = gNivel.pFAtual;
+        bool    ok  = gNivel.leituraOk;
+        xSemaphoreGive(mutexNivel);
+        if (ok) {
+          Serial.printf("%-13ld   %.6f pF\n", raw, pf);
+        } else {
+          Serial.println("[TIMEOUT] FDC1004 sem resposta");
+        }
+      }
+      vTaskDelay(pdMS_TO_TICKS(400));
+    }
+    Serial.println("=== FIM LEITURA ===\n");
+    return true;
+  }
+
   // Diagnóstico
   if (op == "diag") {
     Serial.println("\n====== DIAGNOSTICO V5 ======");

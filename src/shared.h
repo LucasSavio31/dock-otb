@@ -23,6 +23,9 @@
 // TCA9548A
 #define TCA_ADDR     0x70
 
+// FDC1004
+#define FDC_ADDR     0x50
+
 // PWM bomba
 #define BOMBA_PWM_CANAL  1
 #define BOMBA_PWM_FREQ   5000
@@ -84,6 +87,15 @@ struct ControleCmd {
 };
 
 // =========================
+// ESTADO FDC1004
+// =========================
+struct NivelState {
+  int32_t rawAtual  = 0;
+  float   pFAtual   = 0.0f;
+  bool    leituraOk = false;
+};
+
+// =========================
 // HANDLES GLOBAIS
 // =========================
 extern QueueHandle_t     qTagData;
@@ -91,6 +103,7 @@ extern QueueHandle_t     qSerialCmd;
 extern QueueHandle_t     qSerialResp;
 extern QueueHandle_t     qControleCmd;
 extern SemaphoreHandle_t mutexTag;
+extern SemaphoreHandle_t mutexNivel;
 extern TaskHandle_t      hTaskLED;
 
 // =========================
@@ -105,3 +118,4 @@ struct TagState {
   bool     nfcOk       = false;  // PN532 inicializou com sucesso
 };
 extern TagState gTag;
+extern NivelState gNivel;
