@@ -1,0 +1,434 @@
+[
+  {
+    "line": 6,
+    "text": "OTB DockStation v5 — Dashboard"
+  },
+  {
+    "line": 185,
+    "text": "V1.0"
+  },
+  {
+    "line": 190,
+    "text": "Auto-refresh"
+  },
+  {
+    "line": 196,
+    "text": "Desconectado"
+  },
+  {
+    "line": 198,
+    "text": "Conectar"
+  },
+  {
+    "line": 199,
+    "text": "Desconectar"
+  },
+  {
+    "line": 208,
+    "text": "Sistema"
+  },
+  {
+    "line": 219,
+    "text": "Hardware"
+  },
+  {
+    "line": 229,
+    "text": "Diagnóstico"
+  },
+  {
+    "line": 252,
+    "text": "Nenhuma conexão serial"
+  },
+  {
+    "line": 253,
+    "text": "Conectar"
+  },
+  {
+    "line": 253,
+    "text": "para selecionar a porta COM da Dockstation"
+  },
+  {
+    "line": 254,
+    "text": "Conectar Dockstation"
+  },
+  {
+    "line": 261,
+    "text": "Uso de Memória"
+  },
+  {
+    "line": 269,
+    "text": "0 KB"
+  },
+  {
+    "line": 273,
+    "text": "Memória Livre"
+  },
+  {
+    "line": 281,
+    "text": "0 KB"
+  },
+  {
+    "line": 285,
+    "text": "Tasks Ativas"
+  },
+  {
+    "line": 293,
+    "text": "Tasks rodando"
+  },
+  {
+    "line": 297,
+    "text": "Uptime (24h)"
+  },
+  {
+    "line": 305,
+    "text": "Online 🟢"
+  },
+  {
+    "line": 313,
+    "text": "Erros Ativos"
+  },
+  {
+    "line": 317,
+    "text": "Clique em Atualizar para verificar erros"
+  },
+  {
+    "line": 324,
+    "text": "Sensores de Nível"
+  },
+  {
+    "line": 325,
+    "text": "↺ Ler"
+  },
+  {
+    "line": 329,
+    "text": "CH0"
+  },
+  {
+    "line": 336,
+    "text": "CH1"
+  },
+  {
+    "line": 343,
+    "text": "CH2"
+  },
+  {
+    "line": 359,
+    "text": "Códigos de Erro — OTB DockStation"
+  },
+  {
+    "line": 360,
+    "text": "↺ Atualizar"
+  },
+  {
+    "line": 363,
+    "text": "Clique em Atualizar para verificar erros"
+  },
+  {
+    "line": 372,
+    "text": "Informações do Sistema Dockstation"
+  },
+  {
+    "line": 373,
+    "text": "↺ Atualizar"
+  },
+  {
+    "line": 376,
+    "text": "CPU Freq"
+  },
+  {
+    "line": 377,
+    "text": "Heap Livre"
+  },
+  {
+    "line": 378,
+    "text": "Heap Mínima (pico)"
+  },
+  {
+    "line": 379,
+    "text": "Heap Total"
+  },
+  {
+    "line": 380,
+    "text": "PSRAM Livre"
+  },
+  {
+    "line": 381,
+    "text": "Flash Tamanho"
+  },
+  {
+    "line": 382,
+    "text": "Sketch Tamanho"
+  },
+  {
+    "line": 383,
+    "text": "Sketch Livre"
+  },
+  {
+    "line": 384,
+    "text": "Chip / Revisão"
+  },
+  {
+    "line": 385,
+    "text": "Núcleos"
+  },
+  {
+    "line": 386,
+    "text": "WiFi"
+  },
+  {
+    "line": 387,
+    "text": "Hall Sensor"
+  },
+  {
+    "line": 388,
+    "text": "Tasks FreeRTOS"
+  },
+  {
+    "line": 389,
+    "text": "Uptime"
+  },
+  {
+    "line": 398,
+    "text": "Selecionar Leitor"
+  },
+  {
+    "line": 407,
+    "text": "Ações"
+  },
+  {
+    "line": 409,
+    "text": "🔎 Identificar UID"
+  },
+  {
+    "line": 410,
+    "text": "📖 Ler Tag"
+  },
+  {
+    "line": 411,
+    "text": "🔄 Resetar Tag"
+  },
+  {
+    "line": 414,
+    "text": "Gravar Tag"
+  },
+  {
+    "line": 416,
+    "text": "Serial"
+  },
+  {
+    "line": 417,
+    "text": "Vida"
+  },
+  {
+    "line": 418,
+    "text": "Ciclos"
+  },
+  {
+    "line": 419,
+    "text": "💾 Gravar na Tag"
+  },
+  {
+    "line": 425,
+    "text": "Dados da Tag"
+  },
+  {
+    "line": 426,
+    "text": "Aguardando"
+  },
+  {
+    "line": 429,
+    "text": "UID"
+  },
+  {
+    "line": 431,
+    "text": "Serial"
+  },
+  {
+    "line": 432,
+    "text": "Vida"
+  },
+  {
+    "line": 433,
+    "text": "Ciclos"
+  },
+  {
+    "line": 434,
+    "text": "Status"
+  },
+  {
+    "line": 446,
+    "text": "Válvulas Solenóides"
+  },
+  {
+    "line": 449,
+    "text": "Válvula 1"
+  },
+  {
+    "line": 450,
+    "text": "GPIO D26"
+  },
+  {
+    "line": 459,
+    "text": "Válvula 2"
+  },
+  {
+    "line": 460,
+    "text": "GPIO D27"
+  },
+  {
+    "line": 469,
+    "text": "Válvula 3"
+  },
+  {
+    "line": 470,
+    "text": "GPIO D33"
+  },
+  {
+    "line": 479,
+    "text": "▶ Abrir Todas"
+  },
+  {
+    "line": 480,
+    "text": "■ Fechar Todas"
+  },
+  {
+    "line": 486,
+    "text": "Bomba PWM (LEDC)"
+  },
+  {
+    "line": 489,
+    "text": "Duty cycle atual"
+  },
+  {
+    "line": 493,
+    "text": "Duty"
+  },
+  {
+    "line": 499,
+    "text": "✓ Aplicar Duty"
+  },
+  {
+    "line": 500,
+    "text": "▶ ON 100%"
+  },
+  {
+    "line": 501,
+    "text": "■ OFF"
+  },
+  {
+    "line": 504,
+    "text": "Purga (5 seg @ 100%)"
+  },
+  {
+    "line": 517,
+    "text": "Sensores de Nível — FDC1004 / AD7747"
+  },
+  {
+    "line": 519,
+    "text": "▶ Live"
+  },
+  {
+    "line": 520,
+    "text": "↺ Ler Uma Vez"
+  },
+  {
+    "line": 527,
+    "text": "CH0"
+  },
+  {
+    "line": 534,
+    "text": "CH1"
+  },
+  {
+    "line": 541,
+    "text": "CH2"
+  },
+  {
+    "line": 563,
+    "text": "Diagnóstico de Hardware"
+  },
+  {
+    "line": 564,
+    "text": "▶ Executar Diagnóstico"
+  },
+  {
+    "line": 569,
+    "text": "Aguardando execução..."
+  },
+  {
+    "line": 573,
+    "text": "Resumo"
+  },
+  {
+    "line": 582,
+    "text": "Scanner I2C"
+  },
+  {
+    "line": 583,
+    "text": "▶ Executar Scan"
+  },
+  {
+    "line": 585,
+    "text": "Aguardando scan..."
+  },
+  {
+    "line": 593,
+    "text": "Terminal Serial"
+  },
+  {
+    "line": 598,
+    "text": "🗑 Limpar"
+  },
+  {
+    "line": 615,
+    "text": "📡 Serial Monitor"
+  },
+  {
+    "line": 616,
+    "text": "RX: 0 bytes"
+  },
+  {
+    "line": 617,
+    "text": "TX: 0 bytes"
+  },
+  {
+    "line": 618,
+    "text": "Limpar"
+  },
+  {
+    "line": 1009,
+    "text": "✅ Nenhum erro ativo"
+  },
+  {
+    "line": 1011,
+    "text": "${e.code}"
+  },
+  {
+    "line": 1011,
+    "text": "${e.desc}"
+  },
+  {
+    "line": 1012,
+    "text": "...e mais ${errs.length-max} (clique para expandir)"
+  },
+  {
+    "line": 1161,
+    "text": "${item.name}"
+  },
+  {
+    "line": 1161,
+    "text": "${item.cs}"
+  },
+  {
+    "line": 1282,
+    "text": "${it.label}"
+  },
+  {
+    "line": 1282,
+    "text": "${it.value}"
+  },
+  {
+    "line": 1340,
+    "text": "${ok?'OK':'ERR'}"
+  }
+]

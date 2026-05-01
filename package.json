@@ -1,0 +1,44 @@
+{
+  "name": "otb-dock-maintenance-app",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Desktop app for the OTB DockStation maintenance dashboard.",
+  "author": "OTB",
+  "main": "electron/main.js",
+  "scripts": {
+    "start": "electron .",
+    "pack": "electron-builder --win dir",
+    "dist": "electron-builder --win nsis",
+    "dist:portable": "electron-builder --win portable"
+  },
+  "build": {
+    "appId": "com.otb.dockstation.maintenance",
+    "productName": "OTB Dock Maintenance",
+    "directories": {
+      "output": "dist-electron"
+    },
+    "npmRebuild": false,
+    "files": [
+      "electron/**/*",
+      "dashboard/**/*",
+      "package.json"
+    ],
+    "win": {
+      "signAndEditExecutable": false,
+      "target": [
+        "nsis",
+        "portable"
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true
+    }
+  },
+  "devDependencies": {
+    "electron": "^37.2.0",
+    "electron-builder": "^26.0.12"
+  }
+}

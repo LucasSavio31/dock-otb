@@ -1,0 +1,11 @@
+.pio/
+.vscode/
+*.bin
+*.elf
+*.map
+node_modules/
+dist-electron/
+dist-electron-dir/
+dist-electron-portable/
+.claude/settings.local.json
+Microsoft/
