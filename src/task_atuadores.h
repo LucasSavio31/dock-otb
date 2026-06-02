@@ -118,6 +118,7 @@ void taskAtuadores(void *param) {
           else                                                          erroClear(ERR_E302);
           uint8_t duty = (uint8_t)((cc.payload / 100.0f) * 255.0f);
           _bombaSetDuty(duty);
+          gBombaDuty = cc.payload;
           Serial.printf("[Atuadores] BOMBA duty=%d%%\n", cc.payload);
           break;
         }

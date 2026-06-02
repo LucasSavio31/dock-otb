@@ -39,6 +39,8 @@ volatile bool     nfcReinitPending = false;
 volatile uint8_t  nfcReaderOkMask  = 0;
 
 TagState         gTag;
+TagReaderState   gTagReaders[6];
+volatile uint8_t gBombaDuty = 0;
 NivelState       gNivel[3];
 SemaphoreHandle_t mutexNivel = nullptr;
 volatile uint8_t nfcCanalAtivo = 0;

@@ -153,22 +153,31 @@ static void _publicarEvento(TagEvent::Type type, const TagData *data = nullptr,
   if (uid)  { memcpy(ev.uid, uid, uidLen); ev.uidLen = uidLen; }
 
   if (xSemaphoreTake(mutexTag, pdMS_TO_TICKS(20)) == pdTRUE) {
+    uint8_t ri = nfcCanalAtivo;
     switch (type) {
       case TagEvent::TAG_PRESENTE:
         gTag.presente    = true;
         gTag.cacheValido = (data != nullptr);
         if (data) gTag.cache = *data;
         if (uid)  { memcpy(gTag.uid, uid, uidLen); gTag.uidLen = uidLen; }
+        if (ri < 6) {
+          gTagReaders[ri].presente = true;
+          if (data) { gTagReaders[ri].data = *data; gTagReaders[ri].valid = true; }
+        }
         break;
       case TagEvent::TAG_REMOVIDA:
         gTag.presente    = false;
         gTag.cacheValido = false;
         memset(&gTag.cache, 0, sizeof(gTag.cache));
+        if (ri < 6) { gTagReaders[ri].presente = false; gTagReaders[ri].valid = false; }
         break;
       case TagEvent::TAG_LIDA:
       case TagEvent::TAG_GRAVADA:
       case TagEvent::TAG_RESETADA:
-        if (data) { gTag.cache = *data; gTag.cacheValido = true; }
+        if (data) {
+          gTag.cache = *data; gTag.cacheValido = true;
+          if (ri < 6) { gTagReaders[ri].data = *data; gTagReaders[ri].valid = true; }
+        }
         break;
       default: break;
     }

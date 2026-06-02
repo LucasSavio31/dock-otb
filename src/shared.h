@@ -255,11 +255,23 @@ struct TagState {
 };
 extern TagState gTag;
 
+// Cache por leitor NFC (protegido por mutexTag)
+// Indices 0-2 = canetas, 3-5 = cartuchos
+struct TagReaderState {
+  TagData data    = {};
+  bool    valid   = false;
+  bool    presente = false;
+};
+extern TagReaderState gTagReaders[6];
+
 // Canal NFC ativo (0-5), atualizado pela taskNFC
 extern volatile uint8_t nfcCanalAtivo;
 
 // Serial do dock (exibido na pagina dock_status do Nextion)
 extern char gSerialDock[32];
+
+// Duty atual da bomba 0-100 (escrito pela taskAtuadores, lido pela taskNextion)
+extern volatile uint8_t gBombaDuty;
 
 // =========================
 // CALIBRACAO DOS SENSORES DE NIVEL
