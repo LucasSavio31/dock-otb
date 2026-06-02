@@ -292,16 +292,20 @@ static void _enviarErros() {
 }
 
 // =========================
-// SENSORES DE NÍVEL — leitura dos capacitivos
-// Apenas publica no serial; barras ficam para _enviarRecarga (nível dos cartuchos)
+// SENSORES DE NÍVEL — página testes_manuais
+// t0=CANAL 0, t1=CANAL 1, t2=CANAL 2  (leitura ao vivo FDC1004/AD7747)
 // =========================
 static void _enviarNiveis() {
+  char tmp[16];
   if (xSemaphoreTake(mutexNivel, pdMS_TO_TICKS(20)) == pdTRUE) {
     for (uint8_t ch = 0; ch < 3; ch++) {
-      Serial.printf("[Nextion] Sensor CH%d: %.1f%% ok=%d\n",
-                    ch,
-                    gNivel[ch].leituraOk ? gNivel[ch].nivelPct : 0.0f,
-                    gNivel[ch].leituraOk);
+      char field[4] = {'t', (char)('0' + ch), '\0'};
+      if (gNivel[ch].leituraOk) {
+        snprintf(tmp, sizeof(tmp), "%.1f%%", gNivel[ch].nivelPct);
+      } else {
+        snprintf(tmp, sizeof(tmp), "--");
+      }
+      _setText(field, tmp);
     }
     xSemaphoreGive(mutexNivel);
   }
@@ -585,6 +589,7 @@ void taskNextion(void *param) {
 
       _enviarDadosDock();
       _enviarErros();
+      _enviarNiveis();
       _enviarRecarga();
       _enviarTodosLeitores();
     }
