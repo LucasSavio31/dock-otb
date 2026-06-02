@@ -328,23 +328,6 @@ static void _enviarRecarga() {
   // Sync slider de bomba com duty atual
   _setValue("hDuty", (uint32_t)gBombaDuty);
 
-  // Atualiza barra de nível j0 com o canal em recarga ativa
-  if (xSemaphoreTake(mutexRecharge, pdMS_TO_TICKS(20)) == pdTRUE) {
-    RechargeInfo::Status rSt = gRecharge.status;
-    uint8_t rCh = gRecharge.channel;
-    xSemaphoreGive(mutexRecharge);
-    if (rSt != RechargeInfo::IDLE) {
-      float lvl = 0.0f;
-      bool  lvlOk = false;
-      if (xSemaphoreTake(mutexNivel, pdMS_TO_TICKS(20)) == pdTRUE) {
-        lvlOk = gNivel[rCh].leituraOk;
-        lvl   = gNivel[rCh].nivelPct;
-        xSemaphoreGive(mutexNivel);
-      }
-      _setValue("j0", lvlOk ? (uint32_t)_nxClamp(lvl, 0.0f, 100.0f) : 0);
-    }
-  }
-
   // Contagem total de recargas desde o boot
   snprintf(tmp, sizeof(tmp), "%u", (unsigned)gRechargeCount);
   _setText("RecargasHoje", tmp);
@@ -613,13 +596,39 @@ void taskNextion(void *param) {
 
   _nextionLimparTodos();
 
-  uint32_t ultimoRefresh = 0;
+  uint32_t ultimoRefresh  = 0;
+  uint32_t ultimoNivel    = 0;
   TagEvent ev;
 
   for (;;) {
+    uint32_t agora = millis();
+
+    // ── Atualização rápida da barra j0 a cada 200 ms ────────
+    if (agora - ultimoNivel >= 200) {
+      ultimoNivel = agora;
+      // Só envia se há recarga ativa
+      RechargeInfo::Status rSt = RechargeInfo::IDLE;
+      uint8_t rCh = 0;
+      if (xSemaphoreTake(mutexRecharge, pdMS_TO_TICKS(10)) == pdTRUE) {
+        rSt = gRecharge.status;
+        rCh = gRecharge.channel;
+        xSemaphoreGive(mutexRecharge);
+      }
+      if (rSt != RechargeInfo::IDLE) {
+        float lvl   = 0.0f;
+        bool  lvlOk = false;
+        if (xSemaphoreTake(mutexNivel, pdMS_TO_TICKS(10)) == pdTRUE) {
+          lvlOk = gNivel[rCh].leituraOk;
+          lvl   = gNivel[rCh].nivelPct;
+          xSemaphoreGive(mutexNivel);
+        }
+        _setValue("j0", lvlOk ? (uint32_t)_nxClamp(lvl, 0.0f, 100.0f) : 0);
+      }
+    }
+
     // ── Refresh periódico a cada 2s ──────────────────────────
-    if (millis() - ultimoRefresh >= 2000) {
-      ultimoRefresh = millis();
+    if (agora - ultimoRefresh >= 2000) {
+      ultimoRefresh = agora;
 
       if (_verificarHardware()) {
         _nextionCmd("p0.pic=4");
