@@ -66,6 +66,7 @@ struct TagEvent {
   TagData data;
   uint8_t uid[7];
   uint8_t uidLen;
+  uint8_t readerIdx;  // leitor que gerou o evento (0-5)
 };
 
 // =========================

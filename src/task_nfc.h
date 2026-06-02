@@ -150,6 +150,7 @@ static void _publicarEvento(TagEvent::Type type, const TagData *data = nullptr,
                             const uint8_t *uid = nullptr, uint8_t uidLen = 0) {
   TagEvent ev{};
   ev.type = type;
+  ev.readerIdx = nfcCanalAtivo;
   if (data) ev.data = *data;
   if (uid)  { memcpy(ev.uid, uid, uidLen); ev.uidLen = uidLen; }
 
@@ -299,6 +300,8 @@ void taskNFC(void *param) {
   bool     tagPresente    = false;
   uint32_t ultimoDetectMs = 0;
   uint32_t ultimoPollMs   = 0;
+  uint32_t ultimoRotacao  = 0;
+#define ROUND_ROBIN_MS 500
 
   for (;;) {
     uint32_t now = millis();
@@ -461,6 +464,25 @@ void taskNFC(void *param) {
         xTaskNotify(hTaskLED, 0, eSetValueWithOverwrite);
         _publicarEvento(TagEvent::TAG_REMOVIDA);
         Serial.println("[NFC] Tag removida.");
+        ultimoRotacao = now; // espera antes de rotacionar
+      }
+
+      // Round-robin entre leitores quando nenhuma tag presente
+      if (!tagPresente && (now - ultimoRotacao >= ROUND_ROBIN_MS)) {
+        ultimoRotacao = now;
+        uint8_t next = (nfcCanalAtivo + 1) % 6;
+        for (uint8_t t = 0; t < 6; t++) {
+          if (nfcReaderOkMask & (1 << next)) break;
+          next = (next + 1) % 6;
+        }
+        if (next != nfcCanalAtivo) {
+          if (xSemaphoreTake(mutexSPI, pdMS_TO_TICKS(200)) == pdTRUE) {
+            _selecionarLeitor(next);
+            xSemaphoreGive(mutexSPI);
+          }
+          lastUidLen  = 0;
+          tagPresente = false;
+        }
       }
     }
 

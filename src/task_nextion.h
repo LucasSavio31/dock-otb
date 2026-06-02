@@ -370,30 +370,28 @@ static void _enviarRecarga() {
     }
   }
 
-  // tVidaCart1/2/3 reflete o nível do cartucho na posição (por reader, não por cor)
+  // tVidaCart1/2/3 — snapshot para evitar release/reacquire dentro do loop
   static const char* vidaCartFields[3] = { "tVidaCart1", "tVidaCart2", "tVidaCart3" };
+  struct { bool presente; bool valid; TagCor cor; } cs[3] = {};
   if (xSemaphoreTake(mutexTag, pdMS_TO_TICKS(20)) == pdTRUE) {
-    for (uint8_t ri = 3; ri < 6; ri++) {
-      uint8_t slot = ri - 3; // 0-2
-      if (gTagReaders[ri].valid && gTagReaders[ri].presente) {
-        TagCor cor = gTagReaders[ri].data.cor;
-        if (cor >= COR_VERMELHO && cor <= COR_AMARELO) {
-          xSemaphoreGive(mutexTag);
-          snprintf(tmp, sizeof(tmp), "%u%%", (unsigned)gCartLevel[cor]);
-          _setText(vidaCartFields[slot], tmp);
-          xSemaphoreTake(mutexTag, pdMS_TO_TICKS(20));
-        } else {
-          xSemaphoreGive(mutexTag);
-          _setText(vidaCartFields[slot], "?");
-          xSemaphoreTake(mutexTag, pdMS_TO_TICKS(20));
-        }
-      } else {
-        xSemaphoreGive(mutexTag);
-        _setText(vidaCartFields[slot], "N/A");
-        xSemaphoreTake(mutexTag, pdMS_TO_TICKS(20));
-      }
+    for (uint8_t i = 0; i < 3; i++) {
+      cs[i].presente = gTagReaders[i + 3].presente;
+      cs[i].valid    = gTagReaders[i + 3].valid;
+      cs[i].cor      = gTagReaders[i + 3].data.cor;
     }
     xSemaphoreGive(mutexTag);
+  }
+  for (uint8_t i = 0; i < 3; i++) {
+    if (cs[i].presente && cs[i].valid) {
+      if (cs[i].cor >= COR_VERMELHO && cs[i].cor <= COR_AMARELO) {
+        snprintf(tmp, sizeof(tmp), "%u%%", (unsigned)gCartLevel[cs[i].cor]);
+      } else {
+        snprintf(tmp, sizeof(tmp), "?");
+      }
+    } else {
+      snprintf(tmp, sizeof(tmp), "N/A");
+    }
+    _setText(vidaCartFields[i], tmp);
   }
 }
 
@@ -401,19 +399,22 @@ static void _enviarRecarga() {
 // TODOS OS LEITORES — atualiza pens e cartuchos
 // =========================
 static void _enviarTodosLeitores() {
+  // Snapshot completo antes de liberar mutex — evita race com taskNFC
+  TagData snaps[6];
+  bool    present[6] = {false, false, false, false, false, false};
+  bool    valid[6]   = {false, false, false, false, false, false};
+
   if (xSemaphoreTake(mutexTag, pdMS_TO_TICKS(30)) == pdTRUE) {
     for (uint8_t ri = 0; ri < 6; ri++) {
-      if (gTagReaders[ri].presente && gTagReaders[ri].valid) {
-        xSemaphoreGive(mutexTag);
-        _nextionMostrarReader(ri, gTagReaders[ri].data);
-        xSemaphoreTake(mutexTag, pdMS_TO_TICKS(30));
-      } else {
-        xSemaphoreGive(mutexTag);
-        _nextionLimparReader(ri);
-        xSemaphoreTake(mutexTag, pdMS_TO_TICKS(30));
-      }
+      present[ri] = gTagReaders[ri].presente;
+      valid[ri]   = gTagReaders[ri].valid;
+      snaps[ri]   = gTagReaders[ri].data;
     }
     xSemaphoreGive(mutexTag);
+  }
+  for (uint8_t ri = 0; ri < 6; ri++) {
+    if (present[ri] && valid[ri]) _nextionMostrarReader(ri, snaps[ri]);
+    else                          _nextionLimparReader(ri);
   }
 }
 
@@ -583,11 +584,22 @@ static void _processarCmdTexto(const char* cmd) {
 // Core 1, prioridade 2
 // =========================
 void taskNextion(void *param) {
+  // Conecta a 9600, envia comando de upgrade, reconecta a 115200
+  // Nextion aceita o comando se estiver em 9600; se já estiver em 115200, ignora o lixo
   Serial2.begin(9600, SERIAL_8N1, NEXTION_RX, NEXTION_TX);
-  vTaskDelay(pdMS_TO_TICKS(800));
+  vTaskDelay(pdMS_TO_TICKS(300));
+  Serial2.print("baud=115200");
+  Serial2.write(0xFF); Serial2.write(0xFF); Serial2.write(0xFF);
+  vTaskDelay(pdMS_TO_TICKS(200));
+  Serial2.end();
+  Serial2.begin(115200, SERIAL_8N1, NEXTION_RX, NEXTION_TX);
+  vTaskDelay(pdMS_TO_TICKS(500));
 
-  Wire.begin(SDA_PIN, SCL_PIN);
-  Wire.setClock(100000);
+  if (xSemaphoreTake(mutexI2C, pdMS_TO_TICKS(500)) == pdTRUE) {
+    Wire.begin(SDA_PIN, SCL_PIN);
+    Wire.setClock(100000);
+    xSemaphoreGive(mutexI2C);
+  }
 
   if (_verificarHardware()) {
     _nextionCmd("page dock_status");
@@ -596,8 +608,11 @@ void taskNextion(void *param) {
 
   _nextionLimparTodos();
 
-  uint32_t ultimoRefresh  = 0;
-  uint32_t ultimoNivel    = 0;
+  uint32_t ultimoRefresh     = 0;   // 2s — leitores, recarga
+  uint32_t ultimoRefreshLent = 0;   // 10s — dock, erros
+  uint32_t ultimoNivel       = 0;   // 200ms — j0
+  uint32_t ultimoHwCheck     = 0;   // 10s — hardware check
+  bool     hwOk              = false;
   TagEvent ev;
 
   for (;;) {
@@ -626,17 +641,33 @@ void taskNextion(void *param) {
       }
     }
 
-    // ── Refresh periódico a cada 2s ──────────────────────────
+    // ── Hardware check a cada 10s ────────────────────────────
+    if (agora - ultimoHwCheck >= 10000) {
+      ultimoHwCheck = agora;
+      hwOk = _verificarHardware();
+      if (hwOk) _nextionCmd("p0.pic=4");
+    }
+
+    // ── Refresh lento a cada 10s — dados do sistema e erros ──
+    if (agora - ultimoRefreshLent >= 10000) {
+      ultimoRefreshLent = agora;
+      _enviarDadosDock();
+      _enviarErros();
+    }
+
+    // ── Refresh a cada 2s — recarga, sensores, leitores ──────
     if (agora - ultimoRefresh >= 2000) {
       ultimoRefresh = agora;
 
-      if (_verificarHardware()) {
-        _nextionCmd("p0.pic=4");
+      // Só atualiza t0/t1/t2 (testes_manuais) quando não há recarga ativa
+      // para evitar sobrescrever t1 na página andam_rec
+      RechargeInfo::Status rSt = RechargeInfo::IDLE;
+      if (xSemaphoreTake(mutexRecharge, pdMS_TO_TICKS(10)) == pdTRUE) {
+        rSt = gRecharge.status;
+        xSemaphoreGive(mutexRecharge);
       }
+      if (rSt == RechargeInfo::IDLE) _enviarNiveis();
 
-      _enviarDadosDock();
-      _enviarErros();
-      _enviarNiveis();
       _enviarRecarga();
       _enviarTodosLeitores();
     }
@@ -699,7 +730,7 @@ void taskNextion(void *param) {
 
     // ── Eventos de tag ────────────────────────────────────────
     if (xQueueReceive(qNextionData, &ev, pdMS_TO_TICKS(500)) == pdTRUE) {
-      uint8_t ri = nfcCanalAtivo;
+      uint8_t ri = ev.readerIdx;  // índice fixado no momento do evento
       bool ehCaneta = (ri < 3);
 
       switch (ev.type) {
