@@ -328,6 +328,23 @@ static void _enviarRecarga() {
   // Sync slider de bomba com duty atual
   _setValue("hDuty", (uint32_t)gBombaDuty);
 
+  // Atualiza barra de nível j0 com o canal em recarga ativa
+  if (xSemaphoreTake(mutexRecharge, pdMS_TO_TICKS(20)) == pdTRUE) {
+    RechargeInfo::Status rSt = gRecharge.status;
+    uint8_t rCh = gRecharge.channel;
+    xSemaphoreGive(mutexRecharge);
+    if (rSt != RechargeInfo::IDLE) {
+      float lvl = 0.0f;
+      bool  lvlOk = false;
+      if (xSemaphoreTake(mutexNivel, pdMS_TO_TICKS(20)) == pdTRUE) {
+        lvlOk = gNivel[rCh].leituraOk;
+        lvl   = gNivel[rCh].nivelPct;
+        xSemaphoreGive(mutexNivel);
+      }
+      _setValue("j0", lvlOk ? (uint32_t)_nxClamp(lvl, 0.0f, 100.0f) : 0);
+    }
+  }
+
   // Contagem total de recargas desde o boot
   snprintf(tmp, sizeof(tmp), "%u", (unsigned)gRechargeCount);
   _setText("RecargasHoje", tmp);
@@ -466,6 +483,10 @@ static void _mostrarAndamentoRecarga(uint8_t ch, const TagData &d) {
   if (ok) snprintf(tmp, sizeof(tmp), "%.1f%%", nivelPct);
   else    snprintf(tmp, sizeof(tmp), "--");
   _setText("t1", tmp);
+
+  // Barra de progresso j0 — mostra nível 0-100 na tela de recarga
+  uint32_t nivelInt = ok ? (uint32_t)_nxClamp(nivelPct, 0.0f, 100.0f) : 0;
+  _setValue("j0", nivelInt);
 }
 
 static void _limparAndamentoRecarga(uint8_t ch) {
@@ -538,6 +559,23 @@ static void _processarCmdTexto(const char* cmd) {
     xQueueSend(qControleCmd, &cc, 0);
     Serial.printf("[Nextion] PWM slider -> %d%%\n", val);
     logdbPublishf("Nextion", "PWM", LOG_INFO, "Slider PWM=%d%%", val);
+    return;
+  }
+  if (strcmp(cmd, "EMERGENCIA") == 0) {
+    // Para recarga
+    RechargeCmd rc; rc.type = RechargeCmd::STOP; rc.channel = 0;
+    xQueueSend(qRechargeCmd, &rc, 0);
+    // Para bomba
+    ControleCmd cc;
+    cc.type = ControleCmd::BOMBA_OFF; cc.payload = 0;
+    xQueueSend(qControleCmd, &cc, 0);
+    // Fecha todas as válvulas
+    for (uint8_t v = 1; v <= 3; v++) {
+      cc.type = ControleCmd::VALVULA_OFF; cc.payload = v;
+      xQueueSend(qControleCmd, &cc, 0);
+    }
+    Serial.println("[Nextion] EMERGENCIA -> bomba OFF + valvulas OFF");
+    logdbPublish("Nextion", "Emergencia", LOG_WARN, "Parada de emergencia acionada pelo display.");
     return;
   }
   if (strcmp(cmd, "HOME:ABRIU") == 0) {
