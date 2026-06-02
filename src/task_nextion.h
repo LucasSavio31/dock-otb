@@ -292,38 +292,105 @@ static void _enviarErros() {
 }
 
 // =========================
-// SENSORES DE NÍVEL — página recarga / andam_rec
-// barraVermelho=CH0, barraAzul=CH1, barraAmarelo=CH2
+// SENSORES DE NÍVEL — leitura dos capacitivos
+// Apenas publica no serial; barras ficam para _enviarRecarga (nível dos cartuchos)
 // =========================
 static void _enviarNiveis() {
-  static const char* barras[3] = { "barraVermelho", "barraAzul", "barraAmarelo" };
-
   if (xSemaphoreTake(mutexNivel, pdMS_TO_TICKS(20)) == pdTRUE) {
     for (uint8_t ch = 0; ch < 3; ch++) {
-      uint32_t pct = 0;
-      if (gNivel[ch].leituraOk) {
-        pct = (uint32_t)_nxClamp(gNivel[ch].nivelPct, 0.0f, 100.0f);
-      }
-      _setValue(barras[ch], pct);
+      Serial.printf("[Nextion] Sensor CH%d: %.1f%% ok=%d\n",
+                    ch,
+                    gNivel[ch].leituraOk ? gNivel[ch].nivelPct : 0.0f,
+                    gNivel[ch].leituraOk);
     }
     xSemaphoreGive(mutexNivel);
   }
 }
 
 // =========================
-// ESTADO DA RECARGA — página recarga
+// ESTADO DA RECARGA + NÍVEL DOS CARTUCHOS
 // =========================
 static void _enviarRecarga() {
   char tmp[64];
+
+  // Status da recarga ativa
   if (xSemaphoreTake(mutexRecharge, pdMS_TO_TICKS(20)) == pdTRUE) {
     _setText("tRecarga", _rechargeStatusTexto(gRecharge.status));
     snprintf(tmp, sizeof(tmp), "%u%%", gRecharge.dutyPct);
     _setText("tDuty", tmp);
-    _setValue("hDuty", gRecharge.dutyPct);
     xSemaphoreGive(mutexRecharge);
   }
+
   // Sync slider de bomba com duty atual
   _setValue("hDuty", (uint32_t)gBombaDuty);
+
+  // Contagem total de recargas desde o boot
+  snprintf(tmp, sizeof(tmp), "%u", (unsigned)gRechargeCount);
+  _setText("RecargasHoje", tmp);
+  _setText("RecargasHj",   tmp);
+
+  // Nível virtual dos cartuchos por cor
+  // gCartLevel[COR_VERMELHO/AZUL/AMARELO] (-5% por recarga concluída)
+  // p5=vermelho p6=azul p7=amarelo — pics controlados por timer interno da tela;
+  // esconde o ícone (vis=0) se nenhum cartucho com essa cor foi identificado
+  struct { TagCor cor; const char* barra; const char* pic; } cores[3] = {
+    { COR_VERMELHO, "barraVermelho", "p5" },
+    { COR_AZUL,     "barraAzul",    "p6" },
+    { COR_AMARELO,  "barraAmarelo", "p7" },
+  };
+
+  // Determina quais cores estão presentes entre os cartuchos (leitores 3-5)
+  bool corPresente[4] = {false, false, false, false}; // índice = TagCor
+  if (xSemaphoreTake(mutexTag, pdMS_TO_TICKS(20)) == pdTRUE) {
+    for (uint8_t ri = 3; ri < 6; ri++) {
+      if (gTagReaders[ri].valid && gTagReaders[ri].presente) {
+        TagCor c = gTagReaders[ri].data.cor;
+        if (c >= COR_VERMELHO && c <= COR_AMARELO) corPresente[c] = true;
+      }
+    }
+    xSemaphoreGive(mutexTag);
+  }
+
+  for (uint8_t i = 0; i < 3; i++) {
+    TagCor cor = cores[i].cor;
+    uint8_t lv = gCartLevel[cor];
+
+    if (corPresente[cor]) {
+      snprintf(tmp, sizeof(tmp), "vis %s,1", cores[i].pic);
+      _nextionCmd(tmp);
+      _setValue(cores[i].barra, (uint32_t)lv);
+    } else {
+      snprintf(tmp, sizeof(tmp), "vis %s,0", cores[i].pic);
+      _nextionCmd(tmp);
+      _setValue(cores[i].barra, 0);
+    }
+  }
+
+  // tVidaCart1/2/3 reflete o nível do cartucho na posição (por reader, não por cor)
+  static const char* vidaCartFields[3] = { "tVidaCart1", "tVidaCart2", "tVidaCart3" };
+  if (xSemaphoreTake(mutexTag, pdMS_TO_TICKS(20)) == pdTRUE) {
+    for (uint8_t ri = 3; ri < 6; ri++) {
+      uint8_t slot = ri - 3; // 0-2
+      if (gTagReaders[ri].valid && gTagReaders[ri].presente) {
+        TagCor cor = gTagReaders[ri].data.cor;
+        if (cor >= COR_VERMELHO && cor <= COR_AMARELO) {
+          xSemaphoreGive(mutexTag);
+          snprintf(tmp, sizeof(tmp), "%u%%", (unsigned)gCartLevel[cor]);
+          _setText(vidaCartFields[slot], tmp);
+          xSemaphoreTake(mutexTag, pdMS_TO_TICKS(20));
+        } else {
+          xSemaphoreGive(mutexTag);
+          _setText(vidaCartFields[slot], "?");
+          xSemaphoreTake(mutexTag, pdMS_TO_TICKS(20));
+        }
+      } else {
+        xSemaphoreGive(mutexTag);
+        _setText(vidaCartFields[slot], "N/A");
+        xSemaphoreTake(mutexTag, pdMS_TO_TICKS(20));
+      }
+    }
+    xSemaphoreGive(mutexTag);
+  }
 }
 
 // =========================
@@ -453,7 +520,6 @@ void taskNextion(void *param) {
 
       _enviarDadosDock();
       _enviarErros();
-      _enviarNiveis();
       _enviarRecarga();
       _enviarTodosLeitores();
     }

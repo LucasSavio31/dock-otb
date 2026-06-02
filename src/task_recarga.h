@@ -191,6 +191,20 @@ void taskRecarga(void *param) {
 
     if (state == RechargeInfo::DONE || state == RechargeInfo::SATURATED) {
       _rechargeIncrementPersistentCount();
+      // Decrementa nível do cartucho pela cor identificada na tag
+      // Leitores 3-5 correspondem aos cartuchos dos canais 0-2
+      TagCor cor = COR_DESCONHECIDA;
+      if (xSemaphoreTake(mutexTag, pdMS_TO_TICKS(20)) == pdTRUE) {
+        uint8_t ri = ch + 3;  // reader index do cartucho
+        if (ri < 6 && gTagReaders[ri].valid)
+          cor = gTagReaders[ri].data.cor;
+        xSemaphoreGive(mutexTag);
+      }
+      if (cor >= COR_VERMELHO && cor <= COR_AMARELO) {
+        if (gCartLevel[cor] >= 5) gCartLevel[cor] -= 5;
+        else                       gCartLevel[cor]  = 0;
+      }
+      gRechargeCount++;
       state = RechargeInfo::IDLE;
       sensorErrCount = 0;
     }

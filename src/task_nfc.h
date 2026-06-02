@@ -97,6 +97,7 @@ static bool _lerTag(TagData &d) {
   d.ciclos = word(p[3], p[2]);
   if (!_readPage(5, p)) return false;
   d.status = p[0];
+  d.cor    = (p[1] <= 3) ? (TagCor)p[1] : COR_DESCONHECIDA;
   for (int i = 0; i < 4; i++) {
     if (!_readPage(6 + i, p)) return false;
     memcpy(&d.serial[i * 4], p, 4);
@@ -115,7 +116,7 @@ static bool _gravarTag(const TagData &d) {
   p[0] = lowByte(d.vida);   p[1] = highByte(d.vida);
   p[2] = lowByte(d.ciclos); p[3] = highByte(d.ciclos);
   if (!_writePage(4, p)) return false;
-  p[0] = d.status; p[1] = p[2] = p[3] = 0;
+  p[0] = d.status; p[1] = (uint8_t)d.cor; p[2] = p[3] = 0;
   if (!_writePage(5, p)) return false;
   char buf[16] = {0};
   strncpy(buf, d.serial, 16);

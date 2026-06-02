@@ -40,7 +40,9 @@ volatile uint8_t  nfcReaderOkMask  = 0;
 
 TagState         gTag;
 TagReaderState   gTagReaders[6];
-volatile uint8_t gBombaDuty = 0;
+volatile uint8_t  gBombaDuty     = 0;
+volatile uint8_t  gCartLevel[4]  = {100, 100, 100, 100}; // [0] unused; [1-3] = vermelho/azul/amarelo
+volatile uint16_t gRechargeCount = 0;
 NivelState       gNivel[3];
 SemaphoreHandle_t mutexNivel = nullptr;
 volatile uint8_t nfcCanalAtivo = 0;
