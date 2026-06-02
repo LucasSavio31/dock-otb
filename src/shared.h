@@ -38,10 +38,15 @@
 // =========================
 // ESTRUTURA DE DADOS DA TAG
 // =========================
+// Cor do cartucho/caneta (gravada na página 5 byte 1 da tag NTAG2xx)
+// 0=desconhecida  1=vermelho  2=azul  3=amarelo
+enum TagCor : uint8_t { COR_DESCONHECIDA = 0, COR_VERMELHO = 1, COR_AZUL = 2, COR_AMARELO = 3 };
+
 struct TagData {
   uint16_t vida;
   uint16_t ciclos;
   uint8_t  status;
+  TagCor   cor;      // página 5 byte 1
   char     serial[17];
   char     id[17];
 };
@@ -255,11 +260,29 @@ struct TagState {
 };
 extern TagState gTag;
 
+// Cache por leitor NFC (protegido por mutexTag)
+// Indices 0-2 = canetas, 3-5 = cartuchos
+struct TagReaderState {
+  TagData data    = {};
+  bool    valid   = false;
+  bool    presente = false;
+};
+extern TagReaderState gTagReaders[6];
+
 // Canal NFC ativo (0-5), atualizado pela taskNFC
 extern volatile uint8_t nfcCanalAtivo;
 
 // Serial do dock (exibido na pagina dock_status do Nextion)
 extern char gSerialDock[32];
+
+// Duty atual da bomba 0-100 (escrito pela taskAtuadores, lido pela taskNextion)
+extern volatile uint8_t gBombaDuty;
+
+// Nível virtual dos cartuchos 0-100% por cor (não persistente; -5% por recarga)
+// Índice = TagCor (1=vermelho, 2=azul, 3=amarelo), índice 0 não usado
+extern volatile uint8_t  gCartLevel[4];
+// Contagem total de recargas concluídas desde o boot (não persistente)
+extern volatile uint16_t gRechargeCount;
 
 // =========================
 // CALIBRACAO DOS SENSORES DE NIVEL
