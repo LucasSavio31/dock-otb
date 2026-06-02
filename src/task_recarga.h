@@ -41,10 +41,67 @@ static void _rechargeIncrementPersistentCount() {
   if (!mutexNVS || xSemaphoreTake(mutexNVS, pdMS_TO_TICKS(300)) != pdTRUE) return;
   Preferences prefs;
   prefs.begin("otb-dock", false);
-  uint32_t count = prefs.getUInt("rechg_cnt", 0);
-  prefs.putUInt("rechg_cnt", count + 1);
+  prefs.putUInt("rechg_cnt",    prefs.getUInt("rechg_cnt",    0) + 1);
+  prefs.putUInt("total_cycles", prefs.getUInt("total_cycles", 0) + 1);
   prefs.end();
   xSemaphoreGive(mutexNVS);
+}
+
+// Envia CMD_GRAVAR para taskNFC escrever de volta na tag de um leitor
+static void _gravarTagNFC(uint8_t readerIdx, const TagData &d) {
+  SerialCmd sc{};
+  sc.type      = SerialCmd::CMD_GRAVAR;
+  sc.readerIdx = readerIdx;
+  sc.payload   = d;
+  xQueueSend(qSerialCmd, &sc, pdMS_TO_TICKS(100));
+}
+
+// Atualiza tag da caneta após recarga concluída
+static void _salvarTagCaneta(uint8_t ch) {
+  if (xSemaphoreTake(mutexTag, pdMS_TO_TICKS(30)) != pdTRUE) return;
+  if (!gTagReaders[ch].valid || !gTagReaders[ch].presente) {
+    xSemaphoreGive(mutexTag);
+    return;
+  }
+  TagData d = gTagReaders[ch].data;
+  xSemaphoreGive(mutexTag);
+
+  d.ciclos++;
+  d.status = 1; // OK / carregada
+
+  // Atualiza cache local antes de enviar para fila
+  if (xSemaphoreTake(mutexTag, pdMS_TO_TICKS(30)) == pdTRUE) {
+    gTagReaders[ch].data = d;
+    xSemaphoreGive(mutexTag);
+  }
+  _gravarTagNFC(ch, d);
+  logdbPublishf("Recarga", "TagCaneta", LOG_SUCCESS,
+                "Caneta %u: ciclos=%u status=%u gravados no NFC.", (unsigned)(ch+1), d.ciclos, d.status);
+}
+
+// Atualiza tag do cartucho após recarga concluída
+static void _salvarTagCartucho(uint8_t ch) {
+  uint8_t rc = ch + 3; // leitor do cartucho
+  if (xSemaphoreTake(mutexTag, pdMS_TO_TICKS(30)) != pdTRUE) return;
+  if (!gTagReaders[rc].valid || !gTagReaders[rc].presente) {
+    xSemaphoreGive(mutexTag);
+    return;
+  }
+  TagData d = gTagReaders[rc].data;
+  xSemaphoreGive(mutexTag);
+
+  // vida representa % de tinta restante (0-100); decrementa 5 por recarga
+  if (d.vida >= 5) d.vida -= 5;
+  else             d.vida  = 0;
+  d.ciclos++;
+
+  if (xSemaphoreTake(mutexTag, pdMS_TO_TICKS(30)) == pdTRUE) {
+    gTagReaders[rc].data = d;
+    xSemaphoreGive(mutexTag);
+  }
+  _gravarTagNFC(rc, d);
+  logdbPublishf("Recarga", "TagCartucho", LOG_SUCCESS,
+                "Cartucho %u: vida=%u ciclos=%u gravados no NFC.", (unsigned)(ch+1), d.vida, d.ciclos);
 }
 
 // ── Task ──────────────────────────────────────────────────────
@@ -191,13 +248,13 @@ void taskRecarga(void *param) {
 
     if (state == RechargeInfo::DONE || state == RechargeInfo::SATURATED) {
       _rechargeIncrementPersistentCount();
-      // Decrementa nível do cartucho pela cor identificada na tag
-      // Leitores 3-5 correspondem aos cartuchos dos canais 0-2
+
+      // Decrementa nível virtual do cartucho pela cor da tag
       TagCor cor = COR_DESCONHECIDA;
       if (xSemaphoreTake(mutexTag, pdMS_TO_TICKS(20)) == pdTRUE) {
-        uint8_t ri = ch + 3;  // reader index do cartucho
-        if (ri < 6 && gTagReaders[ri].valid)
-          cor = gTagReaders[ri].data.cor;
+        uint8_t rc = ch + 3;
+        if (rc < 6 && gTagReaders[rc].valid)
+          cor = gTagReaders[rc].data.cor;
         xSemaphoreGive(mutexTag);
       }
       if (cor >= COR_VERMELHO && cor <= COR_AMARELO) {
@@ -205,6 +262,11 @@ void taskRecarga(void *param) {
         else                       gCartLevel[cor]  = 0;
       }
       gRechargeCount++;
+
+      // Grava dados atualizados nas tags NFC da caneta e do cartucho
+      _salvarTagCaneta(ch);
+      _salvarTagCartucho(ch);
+
       state = RechargeInfo::IDLE;
       sensorErrCount = 0;
     }

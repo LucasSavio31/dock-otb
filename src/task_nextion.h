@@ -414,6 +414,71 @@ static void _enviarTodosLeitores() {
 }
 
 // =========================
+// ANDAMENTO DA RECARGA — página andam_rec
+// Exibe dados da caneta + nível do sensor ao identificar a tag.
+// Pen1 (ch=0) e Pen3 (ch=2) têm campos próprios; Pen2 (ch=1) usa campos de Pen1.
+//
+// Campos disponíveis na página andam_rec:
+//   Pen1/2: IdPen1  tStatusPen1  tCiclosPen1  tVidaPen1  tSerialPen1
+//   Pen3:   tIdPen3 tStatusPen3  tCiclosPen3  tVidaPen3  tSerialPen3
+//   Sensor: t1 (nível % do canal)
+// =========================
+static void _mostrarAndamentoRecarga(uint8_t ch, const TagData &d) {
+  // Seleciona slot de campos na tela
+  const char* fId, *fStatus, *fCiclos, *fVida, *fSerial;
+  if (ch == 2) {
+    fId     = "tIdPen3";
+    fStatus = "tStatusPen3";
+    fCiclos = "tCiclosPen3";
+    fVida   = "tVidaPen3";
+    fSerial = "tSerialPen3";
+  } else {
+    // ch=0 e ch=1 usam slot de Pen1
+    fId     = "IdPen1";
+    fStatus = "tStatusPen1";
+    fCiclos = "tCiclosPen1";
+    fVida   = "tVidaPen1";
+    fSerial = "tSerialPen1";
+  }
+
+  _setText(fId,     d.id);
+  _setText(fStatus, _statusTexto(d.status).c_str());
+
+  char tmp[32];
+  snprintf(tmp, sizeof(tmp), "%u", (unsigned)d.ciclos);
+  _setText(fCiclos, tmp);
+  snprintf(tmp, sizeof(tmp), "%u", (unsigned)d.vida);
+  _setText(fVida, tmp);
+  _setText(fSerial, d.serial);
+
+  // Nível atual do sensor para este canal
+  float nivelPct = 0.0f;
+  bool  ok = false;
+  if (xSemaphoreTake(mutexNivel, pdMS_TO_TICKS(20)) == pdTRUE) {
+    ok       = gNivel[ch].leituraOk;
+    nivelPct = gNivel[ch].nivelPct;
+    xSemaphoreGive(mutexNivel);
+  }
+  if (ok) snprintf(tmp, sizeof(tmp), "%.1f%%", nivelPct);
+  else    snprintf(tmp, sizeof(tmp), "--");
+  _setText("t1", tmp);
+}
+
+static void _limparAndamentoRecarga(uint8_t ch) {
+  const char* fId, *fStatus, *fCiclos, *fVida, *fSerial;
+  if (ch == 2) {
+    fId="tIdPen3"; fStatus="tStatusPen3"; fCiclos="tCiclosPen3";
+    fVida="tVidaPen3"; fSerial="tSerialPen3";
+  } else {
+    fId="IdPen1"; fStatus="tStatusPen1"; fCiclos="tCiclosPen1";
+    fVida="tVidaPen1"; fSerial="tSerialPen1";
+  }
+  _setText(fId,"N/A"); _setText(fStatus,"N/A"); _setText(fCiclos,"N/A");
+  _setText(fVida,"N/A"); _setText(fSerial,"N/A");
+  _setText("t1","--");
+}
+
+// =========================
 // VERIFICAÇÃO DE HARDWARE
 // =========================
 static bool _verificarHardware() {
@@ -583,16 +648,48 @@ void taskNextion(void *param) {
     // ── Eventos de tag ────────────────────────────────────────
     if (xQueueReceive(qNextionData, &ev, pdMS_TO_TICKS(500)) == pdTRUE) {
       uint8_t ri = nfcCanalAtivo;
+      bool ehCaneta = (ri < 3);
+
       switch (ev.type) {
         case TagEvent::TAG_PRESENTE:
         case TagEvent::TAG_LIDA:
+          _nextionMostrarReader(ri, ev.data);
+          // Caneta identificada → abre tela de recarga e exibe dados + sensor
+          if (ehCaneta) {
+            _nextionCmd("page andam_rec");
+            vTaskDelay(pdMS_TO_TICKS(100));
+            _mostrarAndamentoRecarga(ri, ev.data);
+          }
+          break;
+
         case TagEvent::TAG_GRAVADA:
+          _nextionMostrarReader(ri, ev.data);
+          // Após gravação bem-sucedida na caneta, atualiza exibição na tela de recarga
+          if (ehCaneta) {
+            _mostrarAndamentoRecarga(ri, ev.data);
+          }
+          break;
+
         case TagEvent::TAG_RESETADA:
           _nextionMostrarReader(ri, ev.data);
           break;
 
         case TagEvent::TAG_REMOVIDA:
           _nextionLimparReader(ri);
+          if (ehCaneta) {
+            _limparAndamentoRecarga(ri);
+            // Se nenhuma caneta estiver mais presente, volta para dock_status
+            bool algumaPenPresente = false;
+            if (xSemaphoreTake(mutexTag, pdMS_TO_TICKS(20)) == pdTRUE) {
+              for (uint8_t i = 0; i < 3; i++) {
+                if (gTagReaders[i].presente) { algumaPenPresente = true; break; }
+              }
+              xSemaphoreGive(mutexTag);
+            }
+            if (!algumaPenPresente) {
+              _nextionCmd("page dock_status");
+            }
+          }
           break;
 
         case TagEvent::TAG_ERRO:
