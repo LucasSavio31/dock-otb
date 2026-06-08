@@ -402,6 +402,8 @@ input[type=range].pump-active::-webkit-slider-thumb{background:linear-gradient(1
 .console-prefix{padding:5px 8px 5px 14px;font-family:monospace;font-size:12px;color:var(--accent);background:transparent;align-self:center;flex-shrink:0}
 .console-input{flex:1;background:transparent;border:none;outline:none;font-family:'Courier New',monospace;font-size:11px;color:#7ee787;padding:5px 4px}
 .c-tx{color:#8a9fff}.c-rx{color:#7ee787}.c-sys{color:#6e7a94}.c-err{color:#f85149}
+.dbg-tag-btn{opacity:.55}.dbg-tag-btn.active{opacity:1;border-color:var(--accent);color:var(--accent)}
+.dbg-ts{color:#4a5568}.dbg-nfc{color:#7ee787}.dbg-sensor{color:#a78bfa}.dbg-i2c{color:#f0883e}.dbg-err{color:#f85149}.dbg-warn{color:#d29922}
 
 /* ── HISTORY ── */
 .history-toolbar{display:flex;align-items:flex-end;justify-content:space-between;gap:12px;flex-wrap:wrap}
@@ -762,11 +764,18 @@ body.theme-light .history-row.head{background:#fff}
     <div class="nav-item" data-page="ativacao">
       <span class="nav-icon">🔐</span><span data-i18n="nav_ativacao">Ativação da Dock</span>
     </div>
+    <div class="nav-item" data-page="ota">
+      <span class="nav-icon">⬆️</span><span>Atualização OTA</span>
+      <span class="nav-badge" id="otaBadge" style="display:none;background:var(--green)">NEW</span>
+    </div>
     <div class="nav-item" data-page="historico">
       <span class="nav-icon">🗂️</span><span data-i18n="nav_historico">Log / Histórico</span>
     </div>
     <div class="nav-item" data-page="console">
       <span class="nav-icon">💬</span><span data-i18n="nav_console">Console</span>
+    </div>
+    <div class="nav-item" data-page="debuglog">
+      <span class="nav-icon">🪲</span>Debug Log
     </div>
   </div>
 
@@ -1218,6 +1227,36 @@ body.theme-light .history-row.head{background:#fff}
       </div>
     </div>
 
+    <!-- ══ PAGE: DEBUG LOG ══ -->
+    <div class="page" id="page-debuglog">
+      <div class="card" style="height:calc(100vh - 200px);display:flex;flex-direction:column">
+        <div class="card-header" style="flex-shrink:0">
+          <div class="card-title">🪲 Debug Log Serial</div>
+          <div class="flex-row" style="gap:8px;flex-wrap:wrap">
+            <input id="dbgFilter" type="text" placeholder="Filtrar (ex: NFC, I2C, SENSOR...)"
+              style="background:var(--surface3);border:1px solid var(--border);border-radius:6px;padding:4px 10px;font-size:12px;color:var(--text);width:220px"
+              oninput="dbgRender()">
+            <button class="btn btn-ghost btn-sm" onclick="dbgTogglePause()" id="btnDbgPause">⏸ Pausar</button>
+            <button class="btn btn-ghost btn-sm" onclick="dbgClear()">🗑 Limpar</button>
+            <button class="btn btn-outline btn-sm" onclick="dbgSave()">💾 Salvar .txt</button>
+          </div>
+        </div>
+        <div style="display:flex;gap:8px;padding:6px 0;flex-shrink:0;flex-wrap:wrap">
+          <button class="btn btn-ghost btn-sm dbg-tag-btn active" onclick="dbgSetTag(this,'')"      >Todos</button>
+          <button class="btn btn-ghost btn-sm dbg-tag-btn"        onclick="dbgSetTag(this,'[nfc]')"  >[NFC]</button>
+          <button class="btn btn-ghost btn-sm dbg-tag-btn"        onclick="dbgSetTag(this,'sensor')" >Sensor</button>
+          <button class="btn btn-ghost btn-sm dbg-tag-btn"        onclick="dbgSetTag(this,'i2c')"    >I2C</button>
+          <button class="btn btn-ghost btn-sm dbg-tag-btn"        onclick="dbgSetTag(this,'err')"    >Erro/ERRO</button>
+          <button class="btn btn-ghost btn-sm dbg-tag-btn"        onclick="dbgSetTag(this,'e0')"     >E0xx</button>
+          <span id="dbgCount" style="font-size:11px;color:var(--muted);margin-left:auto;align-self:center">0 linhas</span>
+        </div>
+        <div id="dbgOut"
+          style="flex:1;overflow-y:auto;font-family:'Courier New',monospace;font-size:11px;
+                 line-height:1.65;padding:8px 12px;background:#010409;border-radius:6px;
+                 border:1px solid var(--border);white-space:pre-wrap;word-break:break-all"></div>
+      </div>
+    </div>
+
     <!-- ══ PAGE: ATIVAÇÃO ══ -->
     <div class="page" id="page-ativacao">
       <div class="grid2" style="align-items:start">
@@ -1614,6 +1653,118 @@ body.theme-light .history-row.head{background:#fff}
 
       </div>
     </div><!-- /page-calibracao -->
+
+    <!-- ══ PAGE: OTA ══════════════════════════════════════════ -->
+    <div class="page" id="page-ota">
+
+      <!-- Status atual -->
+      <div class="card">
+        <div class="card-header">
+          <div class="card-title">⬆️ Atualização de Firmware OTA</div>
+          <button class="btn btn-outline btn-sm" onclick="otaRefreshStatus()">↺ Status</button>
+        </div>
+        <div class="grid4 mb8">
+          <div class="stat"><div class="stat-label">Firmware atual</div><div class="stat-value mono" id="ota-fw-cur">—</div></div>
+          <div class="stat"><div class="stat-label">Última release</div><div class="stat-value mono" id="ota-fw-latest">—</div></div>
+          <div class="stat"><div class="stat-label">Estado</div><div class="stat-value" id="ota-state">—</div></div>
+          <div class="stat"><div class="stat-label">Partição ativa</div><div class="stat-value mono" id="ota-partition">—</div></div>
+        </div>
+        <div id="ota-update-badge" style="display:none" class="alert alert-warn">
+          🆕 Nova versão disponível! Clique em <strong>Atualizar</strong> para instalar.
+        </div>
+        <div id="ota-valid-badge" style="display:none" class="alert alert-info">
+          ⏳ Firmware em validação — aguardando janela de 60 s sem falhas.
+        </div>
+      </div>
+
+      <!-- WiFi config -->
+      <div class="card">
+        <div class="card-header">
+          <div class="card-title">📡 Configuração WiFi</div>
+          <div style="display:flex;align-items:center;gap:8px">
+            <!-- Badge de status WiFi -->
+            <span id="ota-wifi-badge" style="display:none;font-size:10px;font-weight:700;padding:3px 8px;border-radius:10px;letter-spacing:.5px"></span>
+            <button class="btn btn-outline btn-sm" id="btnWifiScan" onclick="otaScan()">🔍 Escanear redes</button>
+          </div>
+        </div>
+
+        <!-- Painel "conectado" — visível quando WiFi OK -->
+        <div id="ota-wifi-connected-panel" style="display:none;margin-bottom:12px;padding:10px 12px;border-radius:6px;
+             background:rgba(63,185,80,.08);border:1px solid rgba(63,185,80,.25)">
+          <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+            <span style="font-size:18px">✅</span>
+            <div>
+              <div style="font-size:12px;font-weight:700;color:var(--green)" id="ota-wifi-connected-ssid">Conectado</div>
+              <div style="font-size:11px;color:var(--muted)" id="ota-wifi-connected-ip"></div>
+            </div>
+            <button class="btn btn-ghost btn-sm" style="margin-left:auto" onclick="otaShowWifiConfig()">✏️ Alterar</button>
+          </div>
+        </div>
+
+        <!-- Painel de configuração — oculto quando já conectado -->
+        <div id="ota-wifi-config-panel">
+          <!-- Lista de redes escaneadas — só aparece após scan -->
+          <div id="ota-net-list" style="display:none;margin-bottom:12px">
+            <div style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.8px;margin-bottom:6px">
+              Redes disponíveis — clique para selecionar
+            </div>
+            <div id="ota-net-items"
+                 style="display:flex;flex-direction:column;gap:4px;max-height:200px;overflow-y:auto;
+                        border:1px solid var(--border);border-radius:6px;padding:4px;background:var(--surface3)">
+            </div>
+          </div>
+
+          <div style="display:flex;flex-direction:column;gap:10px;max-width:420px">
+            <div class="form-row">
+              <label>SSID</label>
+              <input type="text" id="ota-ssid" placeholder="Nome da rede (case-sensitive)"
+                     style="flex:1;background:var(--surface3);border:1px solid var(--border);border-radius:5px;padding:6px 10px;color:var(--text);font-size:12px">
+            </div>
+            <div class="form-row">
+              <label>Senha</label>
+              <div style="flex:1;display:flex;gap:6px">
+                <input type="password" id="ota-pass" placeholder="Senha (vazio = rede aberta)"
+                       style="flex:1;background:var(--surface3);border:1px solid var(--border);border-radius:5px;padding:6px 10px;color:var(--text);font-size:12px">
+                <button class="btn btn-ghost btn-sm" onclick="otaTogglePassVis()" title="Mostrar/ocultar senha">👁</button>
+              </div>
+            </div>
+            <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+              <button class="btn btn-primary btn-sm" onclick="otaSaveWifi()">💾 Salvar credenciais</button>
+              <div id="ota-wifi-msg" style="font-size:11px;color:var(--muted)"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Ações -->
+      <div class="card">
+        <div class="card-header">
+          <div class="card-title">🔧 Ações</div>
+        </div>
+        <div style="display:flex;flex-wrap:wrap;gap:10px;align-items:center">
+          <button class="btn btn-outline" id="btnOtaCheck" onclick="otaCheck()">🔍 Verificar releases</button>
+          <button class="btn btn-primary" id="btnOtaUpdate" onclick="otaUpdate()">⬆️ Atualizar firmware</button>
+          <button class="btn" id="btnOtaRollback" onclick="otaRollback()"
+                  style="background:var(--surface3);border:1px solid var(--red);color:var(--red)">
+            ↩️ Rollback
+          </button>
+        </div>
+
+        <!-- Barra de progresso -->
+        <div id="ota-progress-wrap" style="display:none;margin-top:14px">
+          <div style="font-size:11px;color:var(--muted);margin-bottom:4px" id="ota-progress-lbl">Download: 0%</div>
+          <div style="background:var(--surface3);border-radius:4px;height:8px;overflow:hidden;border:1px solid var(--border)">
+            <div id="ota-progress-bar" style="height:100%;width:0%;background:var(--accent);transition:width .3s"></div>
+          </div>
+        </div>
+
+        <!-- Log de saída -->
+        <div id="ota-log" style="margin-top:12px;background:#010409;border:1px solid var(--border);
+             border-radius:6px;padding:10px;font-size:11px;font-family:monospace;
+             color:var(--text);max-height:180px;overflow-y:auto;white-space:pre-wrap"></div>
+      </div>
+
+    </div><!-- /page-ota -->
 
   </div><!-- /content-area -->
 </div><!-- /main -->
@@ -2611,6 +2762,10 @@ async function doConnectPort(port, btn) {
     historyAddEntry({ type: 'Comunicação', origin: 'Dashboard', description: 'Dashboard conectado à dock.', severity: 'success', status: 'Conectado' });
     await delay(1000);
     refreshOverview();
+    // Pede status OTA em 3 momentos distintos: cobre boot rápido, WiFi lento e sessões longas
+    setTimeout(otaRefreshStatus, 3000);
+    setTimeout(otaRefreshStatus, 9000);
+    setTimeout(otaRefreshStatus, 20000);
   } catch(e) {
     appendLog('err', t('msg_connect_failed') + ' ' + e.message);
     historyAddEntry({ type: 'Comunicação', origin: 'Dashboard', description: 'Falha ao conectar à dock: ' + e.message, severity: 'error', status: 'Falha' });
@@ -2650,6 +2805,11 @@ async function doDisconnect() {
     } catch(_) {}
   }
   serial.connected = false;
+  // Libera Q — resolve imediatamente qualquer sendCmd pendente para não travar na reconexão
+  if (serial.silenceTimer) { clearTimeout(serial.silenceTimer); serial.silenceTimer = null; }
+  if (serial.silenceResolve) { const cb = serial.silenceResolve; serial.silenceResolve = null; cb(serial.buffer || ''); }
+  Q._queue = [];
+  Q._running = false;
   try { if (serial.reader) await serial.reader.cancel(); } catch(_) {}
   try { if (serial.writer) serial.writer.releaseLock(); } catch(_) {}
   try { if (serial.port)   await serial.port.close(); } catch(_) {}
@@ -2691,6 +2851,7 @@ async function startReading() {
       for (const raw of parts) {
         const line = raw.trim();
         if (!line) continue;
+        dbgPush(line);          // debug log usa linhas completas (nunca fragmentadas)
         historyObserveSerialLine(line);
         if (sensorLive) parseSensorLine(line);
         if (line.startsWith('NVS_ACTIVATION:'))            nvsHandleActivation(line.substring(15));
@@ -2708,6 +2869,7 @@ async function startReading() {
         else if (line.startsWith('CALIB_CAPDAC_OK:'))      capdacHandleOk(line.substring(16));
         else if (line.startsWith('CALIB_CAPDAC_ERR:'))     capdacHandleErr(line.substring(17));
         else if (line.startsWith('CALIB_CAPDAC:'))         capdacHandleGet(line.substring(13));
+        else if (line.startsWith('OTA_'))                  otaHandleLine(line);
       }
     }
   } catch(_) {}
@@ -2786,6 +2948,112 @@ function clearConsole() {
 }
 
 // ═══════════════════════════════════════════════════════════════
+//  DEBUG LOG
+// ═══════════════════════════════════════════════════════════════
+const DBG_MAX   = 10000;
+const dbgBuf    = [];        // [{ts, line}]
+let   dbgPaused = false;
+let   dbgTagFilter = '';     // '' = todos
+let   dbgRenderPending = false;
+
+function _fmtTs(d) {
+  const hh = String(d.getHours()).padStart(2,'0');
+  const mm = String(d.getMinutes()).padStart(2,'0');
+  const ss = String(d.getSeconds()).padStart(2,'0');
+  const ms = String(d.getMilliseconds()).padStart(3,'0');
+  return `${hh}:${mm}:${ss}.${ms}`;
+}
+
+function dbgPush(line) {
+  dbgBuf.push({ ts: new Date(), line });
+  if (dbgBuf.length > DBG_MAX) dbgBuf.shift();
+  if (!dbgPaused && !dbgRenderPending) {
+    dbgRenderPending = true;
+    requestAnimationFrame(() => { dbgRenderPending = false; dbgRender(); });
+  }
+}
+
+function _dbgClass(line) {
+  const u = line.toUpperCase();
+  if (u.includes('[NFC]'))                            return 'dbg-nfc';
+  if (/^CH[0-9]/.test(u) || u.includes('[SENSOR]'))  return 'dbg-sensor';
+  if (u.includes('I2C') || u.includes('TCA') || u.includes('WIRE')) return 'dbg-i2c';
+  if (u.includes('ERRO') || u.includes('ERROR') || /\bE[0-9]{3}\b/.test(u)) return 'dbg-err';
+  if (u.includes('WARN') || u.includes('AVISO'))      return 'dbg-warn';
+  return '';
+}
+
+function dbgRender() {
+  const out  = document.getElementById('dbgOut');
+  const cnt  = document.getElementById('dbgCount');
+  if (!out) return;
+  const fText = (document.getElementById('dbgFilter')?.value || '').toLowerCase();
+  const fTag  = dbgTagFilter.toLowerCase();
+
+  const filtered = dbgBuf.filter(e => {
+    const l = e.line.toLowerCase();
+    return (!fTag || l.includes(fTag)) && (!fText || l.includes(fText));
+  });
+
+  if (cnt) cnt.textContent = filtered.length + ' / ' + dbgBuf.length + ' linhas';
+
+  // Rebuild DOM only when visible
+  out.innerHTML = '';
+  const frag = document.createDocumentFragment();
+  for (const e of filtered) {
+    const row = document.createElement('div');
+    const ts  = document.createElement('span');
+    ts.className   = 'dbg-ts';
+    ts.textContent = '[' + _fmtTs(e.ts) + '] ';
+    const txt = document.createElement('span');
+    txt.className  = _dbgClass(e.line);
+    txt.textContent = e.line + '\n';
+    row.appendChild(ts);
+    row.appendChild(txt);
+    frag.appendChild(row);
+  }
+  out.appendChild(frag);
+  out.scrollTop = out.scrollHeight;
+}
+
+function dbgSetTag(btn, tag) {
+  dbgTagFilter = tag;
+  document.querySelectorAll('.dbg-tag-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  dbgRender();
+}
+
+function dbgTogglePause() {
+  dbgPaused = !dbgPaused;
+  const btn = document.getElementById('btnDbgPause');
+  if (btn) btn.textContent = dbgPaused ? '▶ Retomar' : '⏸ Pausar';
+  if (!dbgPaused) dbgRender();
+}
+
+function dbgClear() {
+  dbgBuf.length = 0;
+  dbgRender();
+}
+
+function dbgSave() {
+  const fText = (document.getElementById('dbgFilter')?.value || '').toLowerCase();
+  const fTag  = dbgTagFilter.toLowerCase();
+  const filtered = dbgBuf.filter(e => {
+    const l = e.line.toLowerCase();
+    return (!fTag || l.includes(fTag)) && (!fText || l.includes(fText));
+  });
+  const lines = filtered.map(e => '[' + _fmtTs(e.ts) + '] ' + e.line).join('\n');
+  const header = `OTB DockStation — Debug Log\nExportado em: ${new Date().toLocaleString('pt-BR')}\nTotal de linhas: ${filtered.length}\n${'='.repeat(60)}\n\n`;
+  const blob = new Blob([header + lines], { type: 'text/plain;charset=utf-8' });
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement('a');
+  a.href     = url;
+  a.download = 'dock_debug_' + new Date().toISOString().replace(/[:.]/g,'-').slice(0,19) + '.txt';
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+// ═══════════════════════════════════════════════════════════════
 //  UI
 // ═══════════════════════════════════════════════════════════════
 function setConnected(ok) {
@@ -2837,6 +3105,8 @@ document.querySelectorAll('.nav-item[data-page]').forEach(el => {
     el.classList.add('active');
     document.getElementById('page-' + el.dataset.page).classList.add('active');
     if (el.dataset.page === 'historico') historyRefreshPage();
+    if (el.dataset.page === 'debuglog')  dbgRender();
+    if (el.dataset.page === 'ota' && serial.connected) otaRefreshStatus();
     if (el.dataset.page === 'ativacao') {
       const fwEl = document.getElementById('activ-fw');
       if (fwEl) fwEl.textContent = historyState.dock.firmwareVersion || '—';
@@ -3421,6 +3691,321 @@ function updateSensorUI(ch, raw, pf, ok) {
 }
 
 // ═══════════════════════════════════════════════════════════════
+//  OTA — Atualização de firmware via GitHub Releases
+// ═══════════════════════════════════════════════════════════════
+
+function otaLog(msg) {
+  const el = document.getElementById('ota-log');
+  if (!el) return;
+  el.textContent += msg + '\n';
+  el.scrollTop = el.scrollHeight;
+}
+
+function otaSetProgress(pct) {
+  const wrap = document.getElementById('ota-progress-wrap');
+  const bar  = document.getElementById('ota-progress-bar');
+  const lbl  = document.getElementById('ota-progress-lbl');
+  if (!wrap) return;
+  if (pct < 0) { wrap.style.display = 'none'; return; }
+  wrap.style.display = 'block';
+  if (bar) bar.style.width = pct + '%';
+  if (lbl) lbl.textContent = (pct < 100 ? 'Download: ' : 'Gravando: ') + pct + '%';
+}
+
+// Chamado pelo parser de linha serial para cada token OTA_*
+function otaHandleLine(line) {
+  otaLog(line);
+
+  if (line.startsWith('OTA_PROGRESS:')) {
+    const pct = parseInt(line.substring(13));
+    if (!isNaN(pct)) otaSetProgress(pct);
+
+  } else if (line.startsWith('OTA_CHECK_OK:')) {
+    const parts = {};
+    line.substring(13).split(',').forEach(p => {
+      const [k, v] = p.split('='); if (k && v !== undefined) parts[k] = v;
+    });
+    setVal('ota-fw-cur',    parts['fw']     || '—');
+    setVal('ota-fw-latest', parts['latest'] || '—');
+    const avail = parts['available'] === '1';
+    const badge = document.getElementById('ota-update-badge');
+    if (badge) badge.style.display = avail ? 'block' : 'none';
+    const navBadge = document.getElementById('otaBadge');
+    if (navBadge) navBadge.style.display = avail ? 'inline' : 'none';
+    setVal('ota-state', avail ? '⬆️ atualização disponível' : 'atualizado ✓');
+
+  } else if (line.startsWith('OTA_STATUS:')) {
+    const parts = {};
+    line.substring(11).split(',').forEach(p => {
+      const eq = p.indexOf('=');
+      if (eq > 0) parts[p.substring(0, eq)] = p.substring(eq + 1);
+    });
+    setVal('ota-fw-cur',    parts['fw']      || '—');
+    setVal('ota-fw-latest', parts['latest']  || '—');
+    setVal('ota-state',     parts['state']   || '—');
+    setVal('ota-partition', parts['running'] || '—');
+    // Mostra badge de update disponível se versões diferentes
+    const fw = parts['fw'] || '', lat = parts['latest'] || '';
+    const avail = fw && lat && lat !== '-' && fw !== lat;
+    const updBadge = document.getElementById('ota-update-badge');
+    if (updBadge) updBadge.style.display = avail ? 'block' : 'none';
+    const navBadge = document.getElementById('otaBadge');
+    if (navBadge) navBadge.style.display = avail ? 'inline' : 'none';
+    // WiFi status — usa IP do campo ip= (evita limpar IP já mostrado)
+    const savedSsid = parts['wifi'] || '';
+    if (savedSsid && savedSsid !== 'nao_configurado') {
+      const ssidEl = document.getElementById('ota-ssid');
+      if (ssidEl && !ssidEl.value) ssidEl.value = savedSsid;
+      if (parts['wifiok'] === '1') {
+        const ip = parts['ip'] || '';
+        _otaSetWifiConnected(savedSsid, ip);
+      }
+    }
+    const validBadge = document.getElementById('ota-valid-badge');
+    if (validBadge) validBadge.style.display = parts['pending'] === '1' ? 'block' : 'none';
+
+  } else if (line.startsWith('OTA_WIFI_OK:')) {
+    // WiFi conectou — extrai IP e mostra painel conectado
+    const ip = line.substring(12);
+    const ssidEl = document.getElementById('ota-ssid');
+    const ssid = ssidEl?.value?.trim() || document.getElementById('ota-wifi-connected-ssid')?.textContent?.replace('Conectado: ','') || '—';
+    _otaSetWifiConnected(ssid, ip);
+
+  } else if (line.startsWith('OTA_WIFI_SAVED:')) {
+    const ssid = line.substring(15);
+    const msgEl = document.getElementById('ota-wifi-msg');
+    if (msgEl) { msgEl.textContent = '✅ Salvo: ' + ssid; msgEl.style.color = 'var(--green)'; }
+
+  } else if (line === 'OTA_WIFI_SCAN_START') {
+    _scanNetworks = [];
+    otaRenderNetworks();
+
+  } else if (line.startsWith('OTA_WIFI_SCAN_RESULT:')) {
+    // format: idx,ssid,rssi,secured
+    const parts = line.substring(21).split(',');
+    if (parts.length >= 4) {
+      // SSID pode conter vírgulas — pega tudo entre idx e rssi
+      const idx     = parseInt(parts[0]);
+      const secured = parts[parts.length - 1] === '1';
+      const rssi    = parseInt(parts[parts.length - 2]);
+      const ssid    = parts.slice(1, parts.length - 2).join(',');
+      _scanNetworks.push({ idx, ssid, rssi, secured });
+    }
+
+  } else if (line.startsWith('OTA_WIFI_SCAN_DONE:')) {
+    const n = parseInt(line.substring(19));
+    otaRenderNetworks();
+    otaLog(`Scan concluído: ${n} rede(s) encontrada(s)`);
+
+  } else if (line.startsWith('OTA_FLASH_OK')) {
+    otaSetProgress(100);
+    setVal('ota-state', 'gravado ✓');
+
+  } else if (line.startsWith('OTA_UPDATE_OK')) {
+    otaSetProgress(100);
+    setVal('ota-state', 'reiniciando...');
+    // Após reboot (~15s), pede status com a nova versão
+    setTimeout(otaRefreshStatus, 18000);
+
+  } else if (line.startsWith('OTA_VALIDATED')) {
+    otaSetProgress(-1);
+    setVal('ota-state', 'validado ✓');
+    setTimeout(otaRefreshStatus, 2000);
+
+  } else if (line.startsWith('OTA_UPDATE_FAIL')) {
+    otaSetProgress(-1);
+    setVal('ota-state', 'falha no update');
+
+  } else if (line.startsWith('OTA_ROLLBACK_OK')) {
+    otaSetProgress(-1);
+    setVal('ota-state', 'rollback → reiniciando...');
+    setTimeout(otaRefreshStatus, 18000);
+
+  } else if (line.startsWith('OTA_AUTO_ROLLBACK')) {
+    otaSetProgress(-1);
+    setVal('ota-state', 'rollback automático');
+
+  } else if (line.startsWith('OTA_VALIDATING_TICK:')) {
+    const tick = line.substring(20);
+    setVal('ota-state', `validando... (${tick}s)`);
+
+  } else if (line.startsWith('OTA_ERR')) {
+    otaSetProgress(-1);
+    const msg = line.substring(8);
+    setVal('ota-state', 'erro: ' + msg.substring(0, 35));
+  }
+}
+
+function otaRefreshStatus() {
+  if (!serial.connected || !serial.writer) return;
+  // Escrita direta, sem Q — garante envio mesmo se Q estiver ocupado com overview
+  const enc = new TextEncoder().encode('ota status\n');
+  serial.txBytes += enc.length;
+  document.getElementById('txCount').textContent = 'TX: ' + serial.txBytes;
+  serial.writer.write(enc).catch(() => {});
+}
+
+function otaTogglePassVis() {
+  const inp = document.getElementById('ota-pass');
+  if (!inp) return;
+  inp.type = inp.type === 'password' ? 'text' : 'password';
+}
+
+// Mostra/oculta painel de configuração WiFi
+function otaShowWifiConfig() {
+  const cfg = document.getElementById('ota-wifi-config-panel');
+  const con = document.getElementById('ota-wifi-connected-panel');
+  if (cfg) cfg.style.display = 'block';
+  if (con) con.style.display = 'none';
+}
+
+function _otaSetWifiConnected(ssid, ip) {
+  const badge      = document.getElementById('ota-wifi-badge');
+  const conPanel   = document.getElementById('ota-wifi-connected-panel');
+  const cfgPanel   = document.getElementById('ota-wifi-config-panel');
+  const netList    = document.getElementById('ota-net-list');
+  const ssidLabel  = document.getElementById('ota-wifi-connected-ssid');
+  const ipLabel    = document.getElementById('ota-wifi-connected-ip');
+
+  if (badge) {
+    badge.style.display = 'inline';
+    badge.textContent = '● CONECTADO';
+    badge.style.background = 'rgba(63,185,80,.15)';
+    badge.style.color = 'var(--green)';
+    badge.style.border = '1px solid rgba(63,185,80,.3)';
+  }
+  if (ssidLabel) ssidLabel.textContent = 'Conectado: ' + ssid;
+  // Preserva IP já exibido se o novo valor vier vazio (ex: OTA_STATUS sem campo ip=)
+  if (ipLabel && ip) ipLabel.textContent = 'IP: ' + ip;
+  else if (ipLabel && !ipLabel.textContent) ipLabel.textContent = '';
+  if (conPanel)  conPanel.style.display = 'block';
+  if (cfgPanel)  cfgPanel.style.display = 'none';
+  if (netList)   netList.style.display  = 'none';
+}
+
+function _otaSetWifiDisconnected() {
+  const badge    = document.getElementById('ota-wifi-badge');
+  const conPanel = document.getElementById('ota-wifi-connected-panel');
+  const cfgPanel = document.getElementById('ota-wifi-config-panel');
+  if (badge) {
+    badge.style.display = 'inline';
+    badge.textContent = '○ DESCONECTADO';
+    badge.style.background = 'rgba(248,81,73,.1)';
+    badge.style.color = 'var(--red)';
+    badge.style.border = '1px solid rgba(248,81,73,.25)';
+  }
+  if (conPanel) conPanel.style.display = 'none';
+  if (cfgPanel) cfgPanel.style.display = 'block';
+}
+
+async function otaSaveWifi() {
+  const ssid = document.getElementById('ota-ssid')?.value?.trim() || '';
+  const pass = document.getElementById('ota-pass')?.value ?? '';
+  if (!ssid) { alert('Digite o nome da rede WiFi'); return; }
+  const msgEl = document.getElementById('ota-wifi-msg');
+  if (msgEl) { msgEl.textContent = '⏳ Salvando...'; msgEl.style.color = 'var(--muted)'; }
+  const cmd = pass ? `ota wifi ${ssid} ${pass}` : `ota wifi ${ssid}`;
+  await sendCmd(cmd, 2000);
+  // Fallback visual caso OTA_WIFI_SAVED não chegue
+  const msgCur = document.getElementById('ota-wifi-msg')?.textContent || '';
+  if (msgCur.includes('Salvando')) {
+    if (msgEl) { msgEl.textContent = '✅ Enviado'; msgEl.style.color = 'var(--green)'; }
+  }
+}
+
+// ── Scan de redes ─────────────────────────────────────────────
+let _scanNetworks = [];
+
+function _rssiToBars(rssi) {
+  if (rssi >= -55) return '▂▄▆█';
+  if (rssi >= -65) return '▂▄▆░';
+  if (rssi >= -75) return '▂▄░░';
+  return '▂░░░';
+}
+function _rssiColor(rssi) {
+  if (rssi >= -55) return 'var(--green)';
+  if (rssi >= -65) return 'var(--yellow)';
+  if (rssi >= -75) return 'var(--orange)';
+  return 'var(--red)';
+}
+
+function otaRenderNetworks() {
+  const container = document.getElementById('ota-net-items');
+  const listDiv   = document.getElementById('ota-net-list');
+  if (!container) return;
+  container.innerHTML = '';
+  if (_scanNetworks.length === 0) { if (listDiv) listDiv.style.display = 'none'; return; }
+  if (listDiv) listDiv.style.display = 'block';
+
+  _scanNetworks.forEach(net => {
+    const row = document.createElement('div');
+    row.style.cssText = 'display:flex;align-items:center;gap:8px;padding:6px 8px;border-radius:4px;cursor:pointer;transition:background .15s';
+    row.onmouseover = () => { row.style.background = 'rgba(92,111,255,.1)'; };
+    row.onmouseout  = () => { row.style.background = ''; };
+    row.onclick = () => {
+      const ssidEl = document.getElementById('ota-ssid');
+      const passEl = document.getElementById('ota-pass');
+      if (ssidEl) ssidEl.value = net.ssid;
+      if (passEl) { passEl.value = ''; passEl.focus(); }
+    };
+
+    const bars = document.createElement('span');
+    bars.textContent = _rssiToBars(net.rssi);
+    bars.style.cssText = `font-size:11px;letter-spacing:-1px;color:${_rssiColor(net.rssi)};flex-shrink:0;width:32px`;
+
+    const name = document.createElement('span');
+    name.textContent = net.ssid || '(oculto)';
+    name.style.cssText = 'flex:1;font-size:12px;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
+
+    const lock = document.createElement('span');
+    lock.textContent = net.secured ? '🔒' : '🔓';
+    lock.style.cssText = 'font-size:11px;flex-shrink:0';
+
+    const rssiLbl = document.createElement('span');
+    rssiLbl.textContent = net.rssi + ' dBm';
+    rssiLbl.style.cssText = 'font-size:10px;color:var(--muted);flex-shrink:0;width:56px;text-align:right';
+
+    row.append(bars, name, lock, rssiLbl);
+    container.appendChild(row);
+  });
+}
+
+async function otaScan() {
+  const btn = document.getElementById('btnWifiScan');
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ Escaneando...'; }
+  _scanNetworks = [];
+  otaRenderNetworks();
+  otaLog('Iniciando scan WiFi...');
+  await sendCmd('ota scan', 20000);
+  if (btn) { btn.disabled = false; btn.textContent = '🔍 Escanear redes'; }
+}
+
+function otaCheck() {
+  document.getElementById('ota-log').textContent = '';
+  otaSetProgress(-1);
+  setVal('ota-state', 'verificando...');
+  // Envia sem bloquear Q — streaming handler processa OTA_CHECK_OK: / OTA_ERR:
+  if (serial.connected) Q.run(() => _write('ota check\n'));
+}
+
+function otaUpdate() {
+  if (!confirm('Confirma atualização de firmware?\n\nO dispositivo será reiniciado após o download.')) return;
+  document.getElementById('ota-log').textContent = '';
+  otaSetProgress(0);
+  setVal('ota-state', 'baixando...');
+  // Envia sem bloquear Q — streaming handler trata OTA_PROGRESS / OTA_UPDATE_OK / OTA_ERR
+  if (serial.connected) Q.run(() => _write('ota update\n'));
+}
+
+function otaRollback() {
+  if (!confirm('Confirma rollback para o firmware anterior?')) return;
+  document.getElementById('ota-log').textContent = '';
+  otaSetProgress(-1);
+  setVal('ota-state', 'rollback...');
+  if (serial.connected) Q.run(() => _write('ota rollback\n'));
+}
+
+// ═══════════════════════════════════════════════════════════════
 //  AUTO REFRESH — protegido por flag, só uma execução por vez
 // ═══════════════════════════════════════════════════════════════
 let _arRunning = false;
@@ -3437,6 +4022,7 @@ setInterval(async () => {
     else if (page === 'dock')   await refreshDock();
     else if (page === 'erros')  await refreshErros();
     else if (page === 'sensor') await refreshSensor();
+    else if (page === 'ota')    await otaRefreshStatus();
   } finally {
     _arRunning = false;
   }

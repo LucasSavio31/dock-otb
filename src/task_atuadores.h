@@ -72,8 +72,8 @@ void taskAtuadores(void *param) {
   // Estado das válvulas (índices 1-3 usados)
   bool stVal[4]  = {false, false, false, false};
 
-  // Purga temporizada — 0 = inativa
-  uint32_t purgeEndMs = 0;
+  // Purga temporizada — 0 = inativa; usa inicio+elapsed para evitar rollover de millis()
+  uint32_t purgeStartMs = 0;
 
   Serial.println("[Atuadores] Pronto.");
 
@@ -81,9 +81,9 @@ void taskAtuadores(void *param) {
     uint32_t now = millis();
 
     // ── Fim de purga ────────────────────────────────────────
-    if (purgeEndMs > 0 && now >= purgeEndMs) {
+    if (purgeStartMs > 0 && (now - purgeStartMs >= PURGE_DURATION_MS)) {
       _bombaSetDuty(0);
-      purgeEndMs = 0;
+      purgeStartMs = 0;
       Serial.println("[Atuadores] BOMBA -> FIM PURGA");
     }
 
@@ -100,20 +100,20 @@ void taskAtuadores(void *param) {
           _valvula(cc.payload, false);
           break;
         case ControleCmd::BOMBA_ON:
-          purgeEndMs = 0;  // cancela purga se ativa
+          purgeStartMs = 0;  // cancela purga se ativa
           if (!stVal[1] && !stVal[2] && !stVal[3]) erroSetar(ERR_E302);
           else                                      erroClear(ERR_E302);
           _bombaSetDuty(255);
           Serial.println("[Atuadores] BOMBA -> ON (100%)");
           break;
         case ControleCmd::BOMBA_OFF:
-          purgeEndMs = 0;
+          purgeStartMs = 0;
           erroClear(ERR_E302);
           _bombaSetDuty(0);
           Serial.println("[Atuadores] BOMBA -> OFF");
           break;
         case ControleCmd::BOMBA_DUTY: {
-          purgeEndMs = 0;
+          purgeStartMs = 0;
           if (cc.payload > 0 && !stVal[1] && !stVal[2] && !stVal[3]) erroSetar(ERR_E302);
           else                                                          erroClear(ERR_E302);
           uint8_t duty = (uint8_t)((cc.payload / 100.0f) * 255.0f);
@@ -131,18 +131,18 @@ void taskAtuadores(void *param) {
       switch (ac.type) {
 
         case ActCmd::ACT_PURGAR:
-          if (purgeEndMs == 0) {
+          if (purgeStartMs == 0) {
             // Inicia purga temporizada
             if (!stVal[1] && !stVal[2] && !stVal[3]) erroSetar(ERR_E302);
             else                                      erroClear(ERR_E302);
             _bombaSetDuty(255);
-            purgeEndMs = millis() + PURGE_DURATION_MS;
+            purgeStartMs = millis();
             Serial.printf("[Atuadores] BOMBA -> PURGA %dms\n", PURGE_DURATION_MS);
           } else {
             // Cancela purga em andamento
             erroClear(ERR_E302);
             _bombaSetDuty(0);
-            purgeEndMs = 0;
+            purgeStartMs = 0;
             Serial.println("[Atuadores] BOMBA -> PURGA CANCELADA");
           }
           break;

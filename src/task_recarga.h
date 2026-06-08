@@ -130,6 +130,7 @@ void taskRecarga(void *param) {
 
       } else { // START
         if (state != RechargeInfo::IDLE) _rechargeStop(ch);
+        erroClear(ERR_E301);
 
         ch = cmd.channel;
         sensorErrCount = 0;

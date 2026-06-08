@@ -2,6 +2,7 @@
 
 #include <Arduino.h>
 #include <stdlib.h>
+#include <Wire.h>
 #include "shared.h"
 #include "task_erros.h"
 #include "task_nfc.h"
@@ -14,6 +15,7 @@
 #include "task_nvs.h"
 #include "task_recarga.h"
 #include "task_logdb.h"
+#include "task_ota.h"
 
 // =========================
 // HANDLES GLOBAIS
@@ -37,6 +39,7 @@ TaskHandle_t      hTaskI2CScan = nullptr;
 SemaphoreHandle_t semI2CScanDone = nullptr;
 volatile bool     nfcReinitPending = false;
 volatile uint8_t  nfcReaderOkMask  = 0;
+volatile bool     gI2CBusy         = false;
 
 TagState         gTag;
 TagReaderState   gTagReaders[6];
@@ -66,6 +69,12 @@ bool              gLogEpochValid   = false;
 void setup() {
   Serial.begin(115200);
 
+  // Wire inicializado aqui, antes das tasks, para evitar race condition entre
+  // taskNFC (Core 0) e taskNextion (Core 1) que chamavam Wire.begin() simultaneamente
+  Wire.begin(SDA_PIN, SCL_PIN);
+  Wire.setClock(10000);   // 10 kHz — velocidade minima pratica do ESP32 I2C
+  Wire.setTimeOut(100);   // 100 ms — a 10 kHz buffer de 32 bytes leva ~29 ms; margem segura
+
   qTagData     = xQueueCreate(4, sizeof(TagEvent));
   qNextionData = xQueueCreate(4, sizeof(TagEvent));
   qSerialCmd   = xQueueCreate(4, sizeof(SerialCmd));
@@ -85,6 +94,8 @@ void setup() {
   mutexRecharge   = xSemaphoreCreateMutex();
   semI2CScanDone  = xSemaphoreCreateBinary();
   qRechargeCmd    = xQueueCreate(4, sizeof(RechargeCmd));
+  qOtaCmd         = xQueueCreate(4, sizeof(OtaCmd));
+  mutexOta        = xSemaphoreCreateMutex();
 
   configASSERT(qTagData);
   configASSERT(qNextionData);
@@ -105,6 +116,8 @@ void setup() {
   configASSERT(semI2CScanDone);
   configASSERT(qRechargeCmd);
   configASSERT(mutexRecharge);
+  configASSERT(qOtaCmd);
+  configASSERT(mutexOta);
 
   // Core 0: NFC (prio 3) + Sensor (prio 2) + Atuadores (prio 2)
   // Core 1: Nextion (prio 2) + Serial (prio 2) + Erros (prio 1) + LED (prio 1) + I2CScan (prio 1)
@@ -119,6 +132,7 @@ void setup() {
   xTaskCreatePinnedToCore(taskNVS,       "NVS",       2048, nullptr, 1, nullptr,         1);
   xTaskCreatePinnedToCore(taskRecarga,   "Recarga",   3072, nullptr, 2, nullptr,         0);
   xTaskCreatePinnedToCore(taskLogDb,     "LogDb",     4096, nullptr, 1, nullptr,         1);
+  xTaskCreatePinnedToCore(taskOTA,       "OTA",      12288, nullptr, 1, nullptr,         1);
 
   Serial.println("[Main] OTB DockStation V5 — tasks criadas.");
 }

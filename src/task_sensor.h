@@ -127,6 +127,14 @@ static void _aplicarFiltroNivel(uint8_t ch, ChipTipo chip, float &pf, float &niv
 static bool _tcaSel(uint8_t ch) {
   Wire.beginTransmission(TCA_ADDR);
   Wire.write(1 << ch);
+  if (Wire.endTransmission() == 0) return true;
+  // Retry: envia 0x00 para resetar estado interno do TCA e tenta novamente
+  Wire.beginTransmission(TCA_ADDR);
+  Wire.write(0x00);
+  Wire.endTransmission();
+  vTaskDelay(pdMS_TO_TICKS(5));
+  Wire.beginTransmission(TCA_ADDR);
+  Wire.write(1 << ch);
   return (Wire.endTransmission() == 0);
 }
 
@@ -296,6 +304,10 @@ static bool _lerChip(ChipTipo chip, int32_t &raw, float &pf) {
 void taskSensor(void *param) {
   vTaskDelay(pdMS_TO_TICKS(2500));
 
+  // gI2CBusy engloba todos os canais — SPI nao interfere em nenhum intervalo entre canais
+  gI2CBusy = true;
+  if (xSemaphoreTake(mutexSPI, pdMS_TO_TICKS(200)) == pdTRUE) xSemaphoreGive(mutexSPI);
+
   for (uint8_t ch = 0; ch < FDC_NUM_CANAIS; ch++) {
     _chipCanal[ch] = CHIP_NONE;
     _falhasCanal[ch] = 0;
@@ -320,7 +332,15 @@ void taskSensor(void *param) {
     vTaskDelay(pdMS_TO_TICKS(100));
   }
 
+  gI2CBusy = false;
+
   for (;;) {
+    uint8_t tcaOkNesteCiclo = 0;  // conta canais que responderam ao TCA neste ciclo
+
+    // gI2CBusy engloba todos os 3 canais — SPI bloqueado durante todo o ciclo de leitura
+    gI2CBusy = true;
+    if (xSemaphoreTake(mutexSPI, pdMS_TO_TICKS(200)) == pdTRUE) xSemaphoreGive(mutexSPI);
+
     for (uint8_t ch = 0; ch < FDC_NUM_CANAIS; ch++) {
       int32_t raw = 0;
       float pf = 0.0f;
@@ -330,14 +350,16 @@ void taskSensor(void *param) {
 
       if (xSemaphoreTake(mutexI2C, pdMS_TO_TICKS(800)) == pdTRUE) {
         if (_tcaSel(ch)) {
+          tcaOkNesteCiclo++;
+
           // Re-init solicitado por taskSerial apos mudanca de CAPDAC
           if (gCalibDirty[ch] && _chipCanal[ch] != CHIP_NONE) {
             _initChip(_chipCanal[ch], ch);
-            _filtroInit[ch] = false; // reseta filtro EWM apos mudanca de offset
+            _filtroInit[ch] = false;
             gCalibDirty[ch] = false;
           }
 
-          // só tenta redetectar se ainda não encontrou chip
+          // Tenta redetectar chip se ainda nao encontrou
           if (_chipCanal[ch] == CHIP_NONE) {
             _chipCanal[ch] = _detectarChip();
             if (_chipCanal[ch] != CHIP_NONE) {
@@ -354,6 +376,9 @@ void taskSensor(void *param) {
             if (!ok) {
               _falhasCanal[ch]++;
               if (_falhasCanal[ch] >= 5) {
+                Serial.printf("[Sensor] CH%d: %d falhas — chip reiniciando\n",
+                              ch, (int)_falhasCanal[ch]);
+                erroSetar(ERR_E211 + ch);
                 _chipCanal[ch] = CHIP_NONE;
                 _falhasCanal[ch] = 0;
                 _filtroInit[ch] = false;
@@ -361,11 +386,14 @@ void taskSensor(void *param) {
               }
             } else {
               _falhasCanal[ch] = 0;
+              erroClear(ERR_E211 + ch);
               nivelPct = _pfToNivelPctCalib(ch, _chipCanal[ch], pf);
               _aplicarFiltroNivel(ch, _chipCanal[ch], pf, nivelPct);
               saturado = _sensorSaturado(_chipCanal[ch], raw, pf, nivelPct);
             }
           }
+        } else {
+          Serial.printf("[Sensor] TCA CH%d: sem resposta\n", ch);
         }
 
         _tcaFechar();
@@ -390,6 +418,17 @@ void taskSensor(void *param) {
       else        erroClear(ERR_E221);
 
       vTaskDelay(pdMS_TO_TICKS(100));
+    }
+
+    gI2CBusy = false;  // SPI liberado — NFC pode fazer polls durante a pausa
+
+    // Verifica saude do TCA apos ciclo completo
+    if (tcaOkNesteCiclo == 0) {
+      // Nenhum canal respondeu ao TCA9548A — sinaliza falha de I2C
+      erroSetar(ERR_E201);
+      Serial.println("[Sensor] TCA9548A: sem resposta em todos os canais");
+    } else {
+      erroClear(ERR_E201);
     }
 
     vTaskDelay(pdMS_TO_TICKS(200));

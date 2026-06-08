@@ -1,35 +1,11 @@
 #pragma once
 // =============================================================
-//  task_nextion.h — V6
-//
-//  Mapeamento verificado contra IHM_OTB.HMI:
-//
-//  page status_pen / status_cart / status_dock / home:
-//    Pen1 : IdPen1  tStatusPen1  tCiclosPen1  tVidaPen1  tSerialPen1
-//    Pen2 : tIdPen2 tStatusPen2  tCiclosPen2  tVidaPen2  tSerialPen2
-//    Pen3 : tIdPen3 tStatusPen3  tCiclosPen3  tVidaPen3  tSerialPen3
-//    Cart1: tIdCart1 tStatusCart1 tCiclosCart1 tVidaCart1 tSerialCart1
-//    Cart2: tIdCart2 tStatusCart2 tCiclosCart2 tVidaCart2 tSerialCart2
-//    Cart3: tIdCart3 tStatusCart3 tCiclosCart3 tVidaCart3 tSerialCart3
-//
-//  page dock_status / menu_adm:
-//    Freq HeapLiv HeapMin HeapTot Sram Flash SketTam SketLiv
-//    Chip Nucleos Wifi HallSens Tasks Uptime tSerialDock
-//
-//  page home:
-//    Uptime1 tStatus
-//
-//  page erros:
-//    tErroCod1..5  tErroTotal  tStatus
-//    btn_purgar (comp ID 6, pagina configs=4)
-//
-//  page recarga / andam_rec:
-//    barraVermelho(CH0) barraAzul(CH1) barraAmarelo(CH2)
-//    tRecarga
-//
-//  page configs (pg4):
-//    hDuty  tDuty  btn_purgar(6) btn_val1(10) btn_val2(11) btn_val3(12)
-//    Slider hDuty envia texto "PWM=<val>" ao soltar
+//  task_nextion.h — V5
+//  Tela status_pen: IdPen1 StatusPen1 CiclosPen1 VidaPen1 SerialPen1
+//  Tela dock_status: p0.pic=4 + dados Dockstation
+//  Tela erros: tErroCod1..5 tErroDesc1..5 tErroTotal
+//  tStatus: codigo do erro ativo em todas as paginas
+//  Pagina configs (pg4): btn_purgar(6) btn_val1(10) btn_val2(11) btn_val3(12)
 // =============================================================
 
 #include <Arduino.h>
@@ -107,83 +83,26 @@ static const char* _rechargeStatusTexto(RechargeInfo::Status status) {
 }
 
 // =========================
-// HELPERS DE CAMPO POR ÍNDICE
-// Retorna o nome do campo no Nextion para cada leitor (0-5)
-// 0-2 = canetas, 3-5 = cartuchos
+// LIMPA / MOSTRA TAG
 // =========================
-static const char* _nxFieldId(uint8_t ri) {
-  static const char* ids[] = {
-    "IdPen1",  "tIdPen2",  "tIdPen3",
-    "tIdCart1","tIdCart2", "tIdCart3"
-  };
-  return (ri < 6) ? ids[ri] : nullptr;
-}
-static const char* _nxFieldStatus(uint8_t ri) {
-  static const char* f[] = {
-    "tStatusPen1",  "tStatusPen2",  "tStatusPen3",
-    "tStatusCart1", "tStatusCart2", "tStatusCart3"
-  };
-  return (ri < 6) ? f[ri] : nullptr;
-}
-static const char* _nxFieldCiclos(uint8_t ri) {
-  static const char* f[] = {
-    "tCiclosPen1",  "tCiclosPen2",  "tCiclosPen3",
-    "tCiclosCart1", "tCiclosCart2", "tCiclosCart3"
-  };
-  return (ri < 6) ? f[ri] : nullptr;
-}
-static const char* _nxFieldVida(uint8_t ri) {
-  static const char* f[] = {
-    "tVidaPen1",  "tVidaPen2",  "tVidaPen3",
-    "tVidaCart1", "tVidaCart2", "tVidaCart3"
-  };
-  return (ri < 6) ? f[ri] : nullptr;
-}
-static const char* _nxFieldSerial(uint8_t ri) {
-  static const char* f[] = {
-    "tSerialPen1",  "tSerialPen2",  "tSerialPen3",
-    "tSerialCart1", "tSerialCart2", "tSerialCart3"
-  };
-  return (ri < 6) ? f[ri] : nullptr;
-}
-
-// =========================
-// MOSTRA / LIMPA TAG DE UM LEITOR
-// =========================
-static void _nextionLimparReader(uint8_t ri) {
-  if (ri >= 6) return;
-  _setText(_nxFieldId(ri),     "N/A");
-  _setText(_nxFieldStatus(ri), "N/A");
-  _setText(_nxFieldCiclos(ri), "N/A");
-  _setText(_nxFieldVida(ri),   "N/A");
-  _setText(_nxFieldSerial(ri), "N/A");
-}
-
-static void _nextionMostrarReader(uint8_t ri, const TagData &d) {
-  if (ri >= 6) return;
-  _setText(_nxFieldId(ri),     d.id);
-  _setText(_nxFieldStatus(ri), _statusTexto(d.status).c_str());
-  _setText(_nxFieldCiclos(ri), String(d.ciclos).c_str());
-  _setText(_nxFieldVida(ri),   String(d.vida).c_str());
-  _setText(_nxFieldSerial(ri), d.serial);
-}
-
-// Limpar todos os 6 leitores (chamado no boot)
-static void _nextionLimparTodos() {
-  for (uint8_t i = 0; i < 6; i++) _nextionLimparReader(i);
-}
-
-// Alias para compatibilidade com evento qNextionData (usa leitor ativo)
 static void _nextionLimpar() {
-  _nextionLimparReader(nfcCanalAtivo);
+  _setText("IdPen1",     "N/A");
+  _setText("StatusPen1", "N/A");
+  _setText("CiclosPen1", "N/A");
+  _setText("VidaPen1",   "N/A");
+  _setText("SerialPen1", "N/A");
 }
 
 static void _nextionMostrar(const TagData &d) {
-  _nextionMostrarReader(nfcCanalAtivo, d);
+  _setText("IdPen1",     d.id);
+  _setText("StatusPen1", _statusTexto(d.status).c_str());
+  _setText("CiclosPen1", String(d.ciclos).c_str());
+  _setText("VidaPen1",   String(d.vida).c_str());
+  _setText("SerialPen1", d.serial);
 }
 
 // =========================
-// DADOS DO SISTEMA — dock_status / menu_adm
+// DADOS DO SISTEMA — dock_status
 // =========================
 static void _enviarDadosDock() {
   char tmp[64];
@@ -241,14 +160,13 @@ static void _enviarDadosDock() {
            (unsigned long)(s / 3600),
            (unsigned long)((s % 3600) / 60),
            (unsigned long)(s % 60));
-  nx("Uptime",  tmp);
-  nx("Uptime1", tmp);  // página home
+  nx("Uptime", tmp);
 
-  nx("tSerialDock", gSerialDock);
+  nx("Serie", gSerialDock);
 }
 
 // =========================
-// DADOS DE ERROS — página erros
+// DADOS DE ERROS — pagina erros
 // =========================
 static void _enviarErros() {
   char tmp[64];
@@ -273,13 +191,16 @@ static void _enviarErros() {
   }
 
   const char* cf[] = {"tErroCod1", "tErroCod2", "tErroCod3", "tErroCod4", "tErroCod5"};
+  const char* df[] = {"tErroDesc1", "tErroDesc2", "tErroDesc3", "tErroDesc4", "tErroDesc5"};
 
   for (uint8_t i = 0; i < 5; i++) {
     if (i < count) {
       snprintf(tmp, sizeof(tmp), "E%03d", codigos[i]);
       nx(cf[i], tmp);
+      nx(df[i], descs[i] ? descs[i] : "");
     } else {
       nx(cf[i], "----");
+      nx(df[i], "");
     }
   }
 
@@ -292,207 +213,122 @@ static void _enviarErros() {
 }
 
 // =========================
-// SENSORES DE NÍVEL — página testes_manuais
-// t0=CANAL 0, t1=CANAL 1, t2=CANAL 2  (leitura ao vivo FDC1004/AD7747)
+// DASHBOARD RESUMIDA
+// Pagina nova sugerida: dashboard
 // =========================
-static void _enviarNiveis() {
-  char tmp[16];
+static void _enviarDashboard() {
+  char tmp[64];
+  uint8_t primeiro = erroGetPrimeiro();
+  uint16_t codigos[5] = {0};
+  const char* descs[5] = {nullptr};
+  uint8_t errCount = erroGetAtivos(codigos, descs, 5);
+  (void)descs;
+
+  if (primeiro == 0) {
+    _setText("dbStatus", "Pronto");
+  } else {
+    snprintf(tmp, sizeof(tmp), "E%03d", erroGetCodigo(primeiro));
+    _setText("dbStatus", tmp);
+  }
+
+  snprintf(tmp, sizeof(tmp), "%u", errCount);
+  _setText("dbErrCount", tmp);
+  _setText("dbSerial", gSerialDock);
+
+  snprintf(tmp, sizeof(tmp), "%lu", (unsigned long)esp_get_free_heap_size());
+  _setText("dbHeap", tmp);
+
+  snprintf(tmp, sizeof(tmp), "%d", (int)uxTaskGetNumberOfTasks());
+  _setText("dbTasks", tmp);
+
+  uint32_t s = millis() / 1000;
+  snprintf(tmp, sizeof(tmp), "%02lu:%02lu:%02lu",
+           (unsigned long)(s / 3600),
+           (unsigned long)((s % 3600) / 60),
+           (unsigned long)(s % 60));
+  _setText("dbUptime", tmp);
+
+  if (xSemaphoreTake(mutexTag, pdMS_TO_TICKS(20)) == pdTRUE) {
+    if (gTag.presente || gTag.cacheValido) {
+      _setText("dbPenId", gTag.cache.id);
+      _setText("dbPenStatus", _statusTexto(gTag.cache.status).c_str());
+      snprintf(tmp, sizeof(tmp), "%u", gTag.cache.ciclos);
+      _setText("dbPenCycles", tmp);
+      snprintf(tmp, sizeof(tmp), "%u", gTag.cache.vida);
+      _setText("dbPenLife", tmp);
+      _setText("dbPenSerial", gTag.cache.serial);
+    } else {
+      _setText("dbPenId", "N/A");
+      _setText("dbPenStatus", "Sem tag");
+      _setText("dbPenCycles", "--");
+      _setText("dbPenLife", "--");
+      _setText("dbPenSerial", "--");
+    }
+    xSemaphoreGive(mutexTag);
+  }
+
   if (xSemaphoreTake(mutexNivel, pdMS_TO_TICKS(20)) == pdTRUE) {
+    const char* txtIds[3] = { "dbCh0", "dbCh1", "dbCh2" };
+    const char* barIds[3] = { "jCh0", "jCh1", "jCh2" };
+
     for (uint8_t ch = 0; ch < 3; ch++) {
-      char field[4] = {'t', (char)('0' + ch), '\0'};
-      if (gNivel[ch].leituraOk) {
-        snprintf(tmp, sizeof(tmp), "%.1f%%", gNivel[ch].nivelPct);
-      } else {
-        snprintf(tmp, sizeof(tmp), "--");
+      if (!gNivel[ch].leituraOk) {
+        _setText(txtIds[ch], "OFF");
+        _setValue(barIds[ch], 0);
+        continue;
       }
-      _setText(field, tmp);
+
+      const uint32_t nivel = (uint32_t)_nxClamp(gNivel[ch].nivelPct, 0.0f, 100.0f);
+      snprintf(tmp, sizeof(tmp), "%lu%%", (unsigned long)nivel);
+      _setText(txtIds[ch], tmp);
+      _setValue(barIds[ch], nivel);
     }
     xSemaphoreGive(mutexNivel);
   }
-}
 
-// =========================
-// ESTADO DA RECARGA + NÍVEL DOS CARTUCHOS
-// =========================
-static void _enviarRecarga() {
-  char tmp[64];
-
-  // Status da recarga ativa
   if (xSemaphoreTake(mutexRecharge, pdMS_TO_TICKS(20)) == pdTRUE) {
-    _setText("tRecarga", _rechargeStatusTexto(gRecharge.status));
+    _setText("dbRechargeState", _rechargeStatusTexto(gRecharge.status));
+    snprintf(tmp, sizeof(tmp), "CH%u", (unsigned)gRecharge.channel + 1);
+    _setText("dbRechargeChannel", tmp);
+    snprintf(tmp, sizeof(tmp), "%.0f%%", gRecharge.levelPct);
+    _setText("dbRechargeLevel", tmp);
     snprintf(tmp, sizeof(tmp), "%u%%", gRecharge.dutyPct);
-    _setText("tDuty", tmp);
+    _setText("dbRechargeDuty", tmp);
+    _setValue("jRecharge", gRecharge.dutyPct);
     xSemaphoreGive(mutexRecharge);
   }
+}
 
-  // Sync slider de bomba com duty atual
-  _setValue("hDuty", (uint32_t)gBombaDuty);
+// =========================
+// ENVIA IMAGEM HOME
+// =========================
+static void _verificarHome() {
+  bool tcaOk = false;
+  // Timeout 400 ms: taskSensor pode segurar mutexI2C ate 300 ms (AD7747)
+  if (xSemaphoreTake(mutexI2C, pdMS_TO_TICKS(400)) == pdTRUE) {
+    Wire.beginTransmission(TCA_ADDR);
+    tcaOk = (Wire.endTransmission() == 0);
+    xSemaphoreGive(mutexI2C);
+  }
 
-  // Contagem total de recargas desde o boot
-  snprintf(tmp, sizeof(tmp), "%u", (unsigned)gRechargeCount);
-  _setText("RecargasHoje", tmp);
-  _setText("RecargasHj",   tmp);
-
-  // Nível virtual dos cartuchos por cor
-  // gCartLevel[COR_VERMELHO/AZUL/AMARELO] (-5% por recarga concluída)
-  // p5=vermelho p6=azul p7=amarelo — pics controlados por timer interno da tela;
-  // esconde o ícone (vis=0) se nenhum cartucho com essa cor foi identificado
-  struct { TagCor cor; const char* barra; const char* pic; } cores[3] = {
-    { COR_VERMELHO, "barraVermelho", "p5" },
-    { COR_AZUL,     "barraAzul",    "p6" },
-    { COR_AMARELO,  "barraAmarelo", "p7" },
-  };
-
-  // Determina quais cores estão presentes entre os cartuchos (leitores 3-5)
-  bool corPresente[4] = {false, false, false, false}; // índice = TagCor
-  if (xSemaphoreTake(mutexTag, pdMS_TO_TICKS(20)) == pdTRUE) {
-    for (uint8_t ri = 3; ri < 6; ri++) {
-      if (gTagReaders[ri].valid && gTagReaders[ri].presente) {
-        TagCor c = gTagReaders[ri].data.cor;
-        if (c >= COR_VERMELHO && c <= COR_AMARELO) corPresente[c] = true;
-      }
-    }
+  bool nfcOk = false;
+  if (xSemaphoreTake(mutexTag, pdMS_TO_TICKS(50)) == pdTRUE) {
+    nfcOk = gTag.nfcOk;
     xSemaphoreGive(mutexTag);
   }
 
-  for (uint8_t i = 0; i < 3; i++) {
-    TagCor cor = cores[i].cor;
-    uint8_t lv = gCartLevel[cor];
-
-    if (corPresente[cor]) {
-      snprintf(tmp, sizeof(tmp), "vis %s,1", cores[i].pic);
-      _nextionCmd(tmp);
-      _setValue(cores[i].barra, (uint32_t)lv);
-    } else {
-      snprintf(tmp, sizeof(tmp), "vis %s,0", cores[i].pic);
-      _nextionCmd(tmp);
-      _setValue(cores[i].barra, 0);
-    }
-  }
-
-  // tVidaCart1/2/3 — snapshot para evitar release/reacquire dentro do loop
-  static const char* vidaCartFields[3] = { "tVidaCart1", "tVidaCart2", "tVidaCart3" };
-  struct { bool presente; bool valid; TagCor cor; } cs[3] = {};
-  if (xSemaphoreTake(mutexTag, pdMS_TO_TICKS(20)) == pdTRUE) {
-    for (uint8_t i = 0; i < 3; i++) {
-      cs[i].presente = gTagReaders[i + 3].presente;
-      cs[i].valid    = gTagReaders[i + 3].valid;
-      cs[i].cor      = gTagReaders[i + 3].data.cor;
-    }
-    xSemaphoreGive(mutexTag);
-  }
-  for (uint8_t i = 0; i < 3; i++) {
-    if (cs[i].presente && cs[i].valid) {
-      if (cs[i].cor >= COR_VERMELHO && cs[i].cor <= COR_AMARELO) {
-        snprintf(tmp, sizeof(tmp), "%u%%", (unsigned)gCartLevel[cs[i].cor]);
-      } else {
-        snprintf(tmp, sizeof(tmp), "?");
-      }
-    } else {
-      snprintf(tmp, sizeof(tmp), "N/A");
-    }
-    _setText(vidaCartFields[i], tmp);
+  if (tcaOk && nfcOk) {
+    _nextionCmd("p0.pic=4");
   }
 }
 
 // =========================
-// TODOS OS LEITORES — atualiza pens e cartuchos
-// =========================
-static void _enviarTodosLeitores() {
-  // Snapshot completo antes de liberar mutex — evita race com taskNFC
-  TagData snaps[6];
-  bool    present[6] = {false, false, false, false, false, false};
-  bool    valid[6]   = {false, false, false, false, false, false};
-
-  if (xSemaphoreTake(mutexTag, pdMS_TO_TICKS(30)) == pdTRUE) {
-    for (uint8_t ri = 0; ri < 6; ri++) {
-      present[ri] = gTagReaders[ri].presente;
-      valid[ri]   = gTagReaders[ri].valid;
-      snaps[ri]   = gTagReaders[ri].data;
-    }
-    xSemaphoreGive(mutexTag);
-  }
-  for (uint8_t ri = 0; ri < 6; ri++) {
-    if (present[ri] && valid[ri]) _nextionMostrarReader(ri, snaps[ri]);
-    else                          _nextionLimparReader(ri);
-  }
-}
-
-// =========================
-// ANDAMENTO DA RECARGA — página andam_rec
-// Exibe dados da caneta + nível do sensor ao identificar a tag.
-// Pen1 (ch=0) e Pen3 (ch=2) têm campos próprios; Pen2 (ch=1) usa campos de Pen1.
-//
-// Campos disponíveis na página andam_rec:
-//   Pen1/2: IdPen1  tStatusPen1  tCiclosPen1  tVidaPen1  tSerialPen1
-//   Pen3:   tIdPen3 tStatusPen3  tCiclosPen3  tVidaPen3  tSerialPen3
-//   Sensor: t1 (nível % do canal)
-// =========================
-static void _mostrarAndamentoRecarga(uint8_t ch, const TagData &d) {
-  // Seleciona slot de campos na tela
-  const char* fId, *fStatus, *fCiclos, *fVida, *fSerial;
-  if (ch == 2) {
-    fId     = "tIdPen3";
-    fStatus = "tStatusPen3";
-    fCiclos = "tCiclosPen3";
-    fVida   = "tVidaPen3";
-    fSerial = "tSerialPen3";
-  } else {
-    // ch=0 e ch=1 usam slot de Pen1
-    fId     = "IdPen1";
-    fStatus = "tStatusPen1";
-    fCiclos = "tCiclosPen1";
-    fVida   = "tVidaPen1";
-    fSerial = "tSerialPen1";
-  }
-
-  _setText(fId,     d.id);
-  _setText(fStatus, _statusTexto(d.status).c_str());
-
-  char tmp[32];
-  snprintf(tmp, sizeof(tmp), "%u", (unsigned)d.ciclos);
-  _setText(fCiclos, tmp);
-  snprintf(tmp, sizeof(tmp), "%u", (unsigned)d.vida);
-  _setText(fVida, tmp);
-  _setText(fSerial, d.serial);
-
-  // Nível atual do sensor para este canal
-  float nivelPct = 0.0f;
-  bool  ok = false;
-  if (xSemaphoreTake(mutexNivel, pdMS_TO_TICKS(20)) == pdTRUE) {
-    ok       = gNivel[ch].leituraOk;
-    nivelPct = gNivel[ch].nivelPct;
-    xSemaphoreGive(mutexNivel);
-  }
-  if (ok) snprintf(tmp, sizeof(tmp), "%.1f%%", nivelPct);
-  else    snprintf(tmp, sizeof(tmp), "--");
-  _setText("t1", tmp);
-
-  // Barra de progresso j0 — mostra nível 0-100 na tela de recarga
-  uint32_t nivelInt = ok ? (uint32_t)_nxClamp(nivelPct, 0.0f, 100.0f) : 0;
-  _setValue("j0", nivelInt);
-}
-
-static void _limparAndamentoRecarga(uint8_t ch) {
-  const char* fId, *fStatus, *fCiclos, *fVida, *fSerial;
-  if (ch == 2) {
-    fId="tIdPen3"; fStatus="tStatusPen3"; fCiclos="tCiclosPen3";
-    fVida="tVidaPen3"; fSerial="tSerialPen3";
-  } else {
-    fId="IdPen1"; fStatus="tStatusPen1"; fCiclos="tCiclosPen1";
-    fVida="tVidaPen1"; fSerial="tSerialPen1";
-  }
-  _setText(fId,"N/A"); _setText(fStatus,"N/A"); _setText(fCiclos,"N/A");
-  _setText(fVida,"N/A"); _setText(fSerial,"N/A");
-  _setText("t1","--");
-}
-
-// =========================
-// VERIFICAÇÃO DE HARDWARE
+// VERIFICACAO DE HARDWARE
 // =========================
 static bool _verificarHardware() {
   bool tcaOk = false;
-  if (xSemaphoreTake(mutexI2C, pdMS_TO_TICKS(50)) == pdTRUE) {
+  // Timeout 400 ms: taskSensor pode segurar mutexI2C ate 300 ms (AD7747)
+  if (xSemaphoreTake(mutexI2C, pdMS_TO_TICKS(400)) == pdTRUE) {
     Wire.beginTransmission(TCA_ADDR);
     tcaOk = (Wire.endTransmission() == 0);
     xSemaphoreGive(mutexI2C);
@@ -509,10 +345,10 @@ static bool _verificarHardware() {
 
 // =========================
 // PROCESSA TOUCH EVENT 0x65
+// Despacha ActCmd para taskAtuadores via qActCmd
 // =========================
 static void _processarTouch(uint8_t page, uint8_t compID, uint8_t event) {
-  if (event != 0x01) return;
-  if (page != NEXTION_PAGE_CONFIGS) return;
+  if (page != NEXTION_PAGE_CONFIGS || event != 0x01) return;
 
   ActCmd cmd;
   switch (compID) {
@@ -530,154 +366,47 @@ static void _processarTouch(uint8_t page, uint8_t compID, uint8_t event) {
 }
 
 // =========================
-// PROCESSA COMANDO DE TEXTO (ex: "PWM=75")
-// =========================
-static void _processarCmdTexto(const char* cmd) {
-  if (strncmp(cmd, "PWM=", 4) == 0) {
-    int val = atoi(cmd + 4);
-    if (val < 0)   val = 0;
-    if (val > 100) val = 100;
-    ControleCmd cc;
-    cc.type    = ControleCmd::BOMBA_DUTY;
-    cc.payload = (uint8_t)val;
-    xQueueSend(qControleCmd, &cc, 0);
-    Serial.printf("[Nextion] PWM slider -> %d%%\n", val);
-    logdbPublishf("Nextion", "PWM", LOG_INFO, "Slider PWM=%d%%", val);
-    return;
-  }
-  if (strcmp(cmd, "EMERGENCIA") == 0) {
-    // Para recarga
-    RechargeCmd rc; rc.type = RechargeCmd::STOP; rc.channel = 0;
-    xQueueSend(qRechargeCmd, &rc, 0);
-    // Para bomba
-    ControleCmd cc;
-    cc.type = ControleCmd::BOMBA_OFF; cc.payload = 0;
-    xQueueSend(qControleCmd, &cc, 0);
-    // Fecha todas as válvulas
-    for (uint8_t v = 1; v <= 3; v++) {
-      cc.type = ControleCmd::VALVULA_OFF; cc.payload = v;
-      xQueueSend(qControleCmd, &cc, 0);
-    }
-    Serial.println("[Nextion] EMERGENCIA -> bomba OFF + valvulas OFF");
-    logdbPublish("Nextion", "Emergencia", LOG_WARN, "Parada de emergencia acionada pelo display.");
-    return;
-  }
-  if (strcmp(cmd, "HOME:ABRIU") == 0) {
-    bool tcaOk = false;
-    if (xSemaphoreTake(mutexI2C, pdMS_TO_TICKS(50)) == pdTRUE) {
-      Wire.beginTransmission(TCA_ADDR);
-      tcaOk = (Wire.endTransmission() == 0);
-      xSemaphoreGive(mutexI2C);
-    }
-    bool nfcOk = false;
-    if (xSemaphoreTake(mutexTag, pdMS_TO_TICKS(50)) == pdTRUE) {
-      nfcOk = gTag.nfcOk;
-      xSemaphoreGive(mutexTag);
-    }
-    if (tcaOk && nfcOk) _nextionCmd("p0.pic=4");
-    return;
-  }
-}
-
-// =========================
 // TASK NEXTION
 // Core 1, prioridade 2
 // =========================
 void taskNextion(void *param) {
-  // Conecta a 9600, envia comando de upgrade, reconecta a 115200
-  // Nextion aceita o comando se estiver em 9600; se já estiver em 115200, ignora o lixo
   Serial2.begin(9600, SERIAL_8N1, NEXTION_RX, NEXTION_TX);
-  vTaskDelay(pdMS_TO_TICKS(300));
-  Serial2.print("baud=115200");
-  Serial2.write(0xFF); Serial2.write(0xFF); Serial2.write(0xFF);
-  vTaskDelay(pdMS_TO_TICKS(200));
-  Serial2.end();
-  Serial2.begin(115200, SERIAL_8N1, NEXTION_RX, NEXTION_TX);
-  vTaskDelay(pdMS_TO_TICKS(500));
+  vTaskDelay(pdMS_TO_TICKS(800));
 
-  if (xSemaphoreTake(mutexI2C, pdMS_TO_TICKS(500)) == pdTRUE) {
-    Wire.begin(SDA_PIN, SCL_PIN);
-    Wire.setClock(100000);
-    xSemaphoreGive(mutexI2C);
-  }
-
+  // Wire ja inicializado em setup() — nao reinicializar aqui
   if (_verificarHardware()) {
     _nextionCmd("page dock_status");
     vTaskDelay(pdMS_TO_TICKS(300));
   }
 
-  _nextionLimparTodos();
+  _nextionLimpar();
 
-  uint32_t ultimoRefresh     = 0;   // 2s — leitores, recarga
-  uint32_t ultimoRefreshLent = 0;   // 10s — dock, erros
-  uint32_t ultimoNivel       = 0;   // 200ms — j0
-  uint32_t ultimoHwCheck     = 0;   // 10s — hardware check
-  bool     hwOk              = false;
+  uint32_t ultimoRefresh = 0;
   TagEvent ev;
 
   for (;;) {
-    uint32_t agora = millis();
+    // ── Refresh periodico a cada 2s ───────────────────────
+    if (millis() - ultimoRefresh >= 2000) {
+      ultimoRefresh = millis();
 
-    // ── Atualização rápida da barra j0 a cada 200 ms ────────
-    if (agora - ultimoNivel >= 200) {
-      ultimoNivel = agora;
-      // Só envia se há recarga ativa
-      RechargeInfo::Status rSt = RechargeInfo::IDLE;
-      uint8_t rCh = 0;
-      if (xSemaphoreTake(mutexRecharge, pdMS_TO_TICKS(10)) == pdTRUE) {
-        rSt = gRecharge.status;
-        rCh = gRecharge.channel;
-        xSemaphoreGive(mutexRecharge);
+      bool hwOk = _verificarHardware();
+
+      if (hwOk) {
+        _nextionCmd("p0.pic=4");
       }
-      if (rSt != RechargeInfo::IDLE) {
-        float lvl   = 0.0f;
-        bool  lvlOk = false;
-        if (xSemaphoreTake(mutexNivel, pdMS_TO_TICKS(10)) == pdTRUE) {
-          lvlOk = gNivel[rCh].leituraOk;
-          lvl   = gNivel[rCh].nivelPct;
-          xSemaphoreGive(mutexNivel);
-        }
-        _setValue("j0", lvlOk ? (uint32_t)_nxClamp(lvl, 0.0f, 100.0f) : 0);
-      }
-    }
 
-    // ── Hardware check a cada 10s ────────────────────────────
-    if (agora - ultimoHwCheck >= 10000) {
-      ultimoHwCheck = agora;
-      hwOk = _verificarHardware();
-      if (hwOk) _nextionCmd("p0.pic=4");
-    }
-
-    // ── Refresh lento a cada 10s — dados do sistema e erros ──
-    if (agora - ultimoRefreshLent >= 10000) {
-      ultimoRefreshLent = agora;
       _enviarDadosDock();
       _enviarErros();
+      _enviarDashboard();
     }
 
-    // ── Refresh a cada 2s — recarga, sensores, leitores ──────
-    if (agora - ultimoRefresh >= 2000) {
-      ultimoRefresh = agora;
-
-      // Só atualiza t0/t1/t2 (testes_manuais) quando não há recarga ativa
-      // para evitar sobrescrever t1 na página andam_rec
-      RechargeInfo::Status rSt = RechargeInfo::IDLE;
-      if (xSemaphoreTake(mutexRecharge, pdMS_TO_TICKS(10)) == pdTRUE) {
-        rSt = gRecharge.status;
-        xSemaphoreGive(mutexRecharge);
-      }
-      if (rSt == RechargeInfo::IDLE) _enviarNiveis();
-
-      _enviarRecarga();
-      _enviarTodosLeitores();
-    }
-
-    // ── Leitura serial do Nextion ────────────────────────────
+    // ── Le bytes do Nextion: touch events (binario) e texto ──
     {
       static char    rxBuf[32];
       static uint8_t rxIdx   = 0;
       static uint8_t ffCount = 0;
 
+      // Maquina de estados para pacote binario 0x65
       static uint8_t touchBuf[7];
       static uint8_t touchIdx = 0;
       static bool    emTouch  = false;
@@ -685,8 +414,10 @@ void taskNextion(void *param) {
       while (Serial2.available()) {
         uint8_t c = (uint8_t)Serial2.read();
 
+        // Descarta bytes de status conhecidos que nao sao pacotes uteis
         if (!emTouch && c == 0x1A) continue;
 
+        // Inicio de touch event
         if (!emTouch && c == 0x65) {
           emTouch      = true;
           touchBuf[0]  = 0x65;
@@ -696,6 +427,7 @@ void taskNextion(void *param) {
           continue;
         }
 
+        // Acumulando touch event: 0x65 page comp event 0xFF 0xFF 0xFF
         if (emTouch) {
           touchBuf[touchIdx++] = c;
           if (touchIdx == 7) {
@@ -708,14 +440,15 @@ void taskNextion(void *param) {
           continue;
         }
 
-        // Texto terminado por 0xFF 0xFF 0xFF
+        // Texto terminado por 0xFF 0xFF 0xFF (ex: "HOME:ABRIU")
         if (c == 0xFF) {
           ffCount++;
           if (ffCount >= 3) {
             rxBuf[rxIdx] = '\0';
-            if (rxIdx > 0) _processarCmdTexto(rxBuf);
+            String cmd = String(rxBuf);
             rxIdx   = 0;
             ffCount = 0;
+            if (cmd == "HOME:ABRIU") _verificarHome();
           }
         } else {
           ffCount = 0;
@@ -728,55 +461,22 @@ void taskNextion(void *param) {
       }
     }
 
-    // ── Eventos de tag ────────────────────────────────────────
+    // ── Eventos de tag ────────────────────────────────────
     if (xQueueReceive(qNextionData, &ev, pdMS_TO_TICKS(500)) == pdTRUE) {
-      uint8_t ri = ev.readerIdx;  // índice fixado no momento do evento
-      bool ehCaneta = (ri < 3);
-
       switch (ev.type) {
         case TagEvent::TAG_PRESENTE:
         case TagEvent::TAG_LIDA:
-          _nextionMostrarReader(ri, ev.data);
-          // Caneta identificada → abre tela de recarga e exibe dados + sensor
-          if (ehCaneta) {
-            _nextionCmd("page andam_rec");
-            vTaskDelay(pdMS_TO_TICKS(100));
-            _mostrarAndamentoRecarga(ri, ev.data);
-          }
-          break;
-
         case TagEvent::TAG_GRAVADA:
-          _nextionMostrarReader(ri, ev.data);
-          // Após gravação bem-sucedida na caneta, atualiza exibição na tela de recarga
-          if (ehCaneta) {
-            _mostrarAndamentoRecarga(ri, ev.data);
-          }
-          break;
-
         case TagEvent::TAG_RESETADA:
-          _nextionMostrarReader(ri, ev.data);
+          _nextionMostrar(ev.data);
           break;
 
         case TagEvent::TAG_REMOVIDA:
-          _nextionLimparReader(ri);
-          if (ehCaneta) {
-            _limparAndamentoRecarga(ri);
-            // Se nenhuma caneta estiver mais presente, volta para dock_status
-            bool algumaPenPresente = false;
-            if (xSemaphoreTake(mutexTag, pdMS_TO_TICKS(20)) == pdTRUE) {
-              for (uint8_t i = 0; i < 3; i++) {
-                if (gTagReaders[i].presente) { algumaPenPresente = true; break; }
-              }
-              xSemaphoreGive(mutexTag);
-            }
-            if (!algumaPenPresente) {
-              _nextionCmd("page dock_status");
-            }
-          }
+          _nextionLimpar();
           break;
 
         case TagEvent::TAG_ERRO:
-          if (_nxFieldStatus(ri)) _setText(_nxFieldStatus(ri), "Erro");
+          _setText("StatusPen1", "Erro");
           break;
 
         default:

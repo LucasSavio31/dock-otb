@@ -3,7 +3,7 @@
 //  shared.h - V5
 //  Tipos, handles globais e estado compartilhado
 // =============================================================
-#define FIRMWARE_VERSION "V1.0"
+#define FIRMWARE_VERSION "V1.3"
 #include <Arduino.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
@@ -328,3 +328,50 @@ extern volatile bool     gCalibDirty[3];
 // Tipo de chip por canal — escrito exclusivamente pela taskSensor, lido por taskSerial
 // Valores: 0=CHIP_NONE  1=CHIP_FDC1004  2=CHIP_AD7747
 extern volatile uint8_t gChipCanalTipo[3];
+
+// Sinaliza que o barramento I2C esta ativo — taskNFC aguarda antes de iniciar poll SPI
+extern volatile bool gI2CBusy;
+
+// =========================
+// OTA — Atualização via GitHub Releases
+// =========================
+enum OtaCmdType : uint8_t {
+  OTA_CMD_CHECK,      // verifica última release no GitHub
+  OTA_CMD_UPDATE,     // baixa e grava firmware
+  OTA_CMD_ROLLBACK,   // reverte para firmware anterior
+  OTA_CMD_STATUS,     // imprime status atual
+  OTA_CMD_WIFI_SET,   // salva credenciais WiFi na NVS
+  OTA_CMD_WIFI_SCAN,  // escaneia redes disponíveis
+};
+
+struct OtaCmd {
+  OtaCmdType type;
+  char       ssid[64];
+  char       pass[64];
+};
+
+enum OtaStateEnum : uint8_t {
+  OTA_STATE_IDLE = 0,
+  OTA_STATE_WIFI_CONNECTING,
+  OTA_STATE_CHECKING,
+  OTA_STATE_DOWNLOADING,
+  OTA_STATE_FLASHING,
+  OTA_STATE_DONE_OK,
+  OTA_STATE_DONE_ERR,
+  OTA_STATE_VALIDATING,
+};
+
+struct OtaStatus {
+  OtaStateEnum state;
+  char         latestVersion[16];
+  char         errorMsg[96];
+  int          progress;         // 0-100 durante download/flash
+  bool         updateAvailable;
+  bool         wifiOk;
+  bool         pendingValidation;
+  char         wifiSsid[64];
+};
+
+extern QueueHandle_t     qOtaCmd;
+extern SemaphoreHandle_t mutexOta;
+extern OtaStatus         gOtaStatus;

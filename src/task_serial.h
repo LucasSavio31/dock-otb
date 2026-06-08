@@ -125,6 +125,7 @@ static void _mostrarMenuPrincipal() {
   Serial.println("║  sensor  → Leituras FDC1004      ║");
   Serial.println("║  erros   → Codigos de erro       ║");
   Serial.println("║  i2cscan → Scanner I2C           ║");
+  Serial.println("║  ota     → Atualizacao firmware  ║");
   Serial.println("╚══════════════════════════════════╝");
   Serial.print("> ");
 }
@@ -341,9 +342,14 @@ static void _menuDiag() {
 
   if (xSemaphoreTake(mutexSPI, pdMS_TO_TICKS(3000)) == pdTRUE) {
     for (uint8_t i = 0; i < 6; i++) {
+      if (nfcCS[i] == LED2) continue;  // D2 e o LED — nao toca
       pinMode(nfcCS[i], OUTPUT); digitalWrite(nfcCS[i], HIGH);
     }
     for (uint8_t i = 0; i < 6; i++) {
+      if (nfcCS[i] == LED2) {
+        Serial.printf("PN532 #%d CS=%s : OFFLINE (pino LED)\n", i+1, nfcNomes[i]);
+        continue;
+      }
       Adafruit_PN532 nfcTmp(nfcCS[i], &SPI);
       nfcTmp.begin();
       uint32_t fw = nfcTmp.getFirmwareVersion();
@@ -920,6 +926,71 @@ static bool _linhaEcoOuLixo(const String &raw, const String &op) {
   return false;
 }
 
+// ── Menu OTA ──────────────────────────────────────────────────
+
+static void _menuOta(const String& args) {
+  // 'args' tem case original (raw) — usar cópia lowercase só para comparar subcomandos
+  String a  = args; a.trim();
+  String al = a;   al.toLowerCase();
+
+  if (al.length() == 0 || al == "status") {
+    OtaCmd cmd{}; cmd.type = OTA_CMD_STATUS;
+    xQueueSend(qOtaCmd, &cmd, pdMS_TO_TICKS(200));
+    return;
+  }
+  if (al == "check") {
+    Serial.println("OTA_INFO:Verificando releases no GitHub...");
+    OtaCmd cmd{}; cmd.type = OTA_CMD_CHECK;
+    xQueueSend(qOtaCmd, &cmd, pdMS_TO_TICKS(200));
+    return;
+  }
+  if (al == "update") {
+    Serial.println("OTA_INFO:Iniciando download e gravacao...");
+    OtaCmd cmd{}; cmd.type = OTA_CMD_UPDATE;
+    xQueueSend(qOtaCmd, &cmd, pdMS_TO_TICKS(200));
+    return;
+  }
+  if (al == "rollback") {
+    Serial.println("OTA_INFO:Solicitando rollback...");
+    OtaCmd cmd{}; cmd.type = OTA_CMD_ROLLBACK;
+    xQueueSend(qOtaCmd, &cmd, pdMS_TO_TICKS(200));
+    return;
+  }
+  if (al == "scan") {
+    Serial.println("OTA_INFO:Escaneando redes WiFi...");
+    OtaCmd cmd{}; cmd.type = OTA_CMD_WIFI_SCAN;
+    xQueueSend(qOtaCmd, &cmd, pdMS_TO_TICKS(200));
+    return;
+  }
+  // ota wifi <ssid> <senha>  — preserva case original do SSID e senha
+  if (al.startsWith("wifi ")) {
+    String rest = a.substring(5); rest.trim();
+    int sp = rest.indexOf(' ');
+    if (sp < 1) {
+      // Senha vazia (rede aberta): sp==-1
+      if (sp < 0) {
+        // sem senha — rede aberta
+        OtaCmd cmd{};
+        cmd.type = OTA_CMD_WIFI_SET;
+        rest.toCharArray(cmd.ssid, sizeof(cmd.ssid));
+        cmd.pass[0] = '\0';
+        xQueueSend(qOtaCmd, &cmd, pdMS_TO_TICKS(200));
+        return;
+      }
+      Serial.println("OTA_ERR:Uso: ota wifi <ssid> [senha]");
+      return;
+    }
+    OtaCmd cmd{};
+    cmd.type = OTA_CMD_WIFI_SET;
+    rest.substring(0, sp).toCharArray(cmd.ssid, sizeof(cmd.ssid));
+    rest.substring(sp + 1).toCharArray(cmd.pass, sizeof(cmd.pass));
+    xQueueSend(qOtaCmd, &cmd, pdMS_TO_TICKS(200));
+    return;
+  }
+
+  Serial.println("Uso: ota [status|check|update|rollback|scan|wifi <ssid> [senha]]");
+}
+
 void taskSerial(void *param) {
   vTaskDelay(pdMS_TO_TICKS(3500)); // aguarda todas as tasks iniciarem
   Serial.println("[Serial] OTB DockStation V5 — pronto.");
@@ -950,6 +1021,7 @@ void taskSerial(void *param) {
     else if (op.startsWith("nvs "))      _menuNvs(raw.substring(4));
     else if (op.startsWith("calib "))    _menuCalib(op.substring(6));
     else if (op.startsWith("logdb "))    _menuLogDb(raw.substring(6));
+    else if (op == "ota" || op.startsWith("ota "))  _menuOta(raw.length() > 3 ? raw.substring(4) : "");
     else if (op.startsWith("recharge ")) {
       String arg = op.substring(9); arg.trim();
       if (arg == "stop") {
