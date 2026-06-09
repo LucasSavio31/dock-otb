@@ -657,7 +657,7 @@ body.theme-light .history-row.head{background:#fff}
       </div>
       <button class="login-btn" id="loginBtn" type="button" onclick="otbLogin()" data-i18n="login_btn">ACESSAR SISTEMA</button>
       <div class="login-err" id="loginErr"></div>
-      <div class="login-footer">OTB Dockstation Dashboard &nbsp;·&nbsp; V1.0</div>
+      <div class="login-footer">OTB Dockstation Dashboard &nbsp;·&nbsp; V1.5</div>
     </div>
   </div>
 </div>
@@ -677,7 +677,7 @@ body.theme-light .history-row.head{background:#fff}
   <div class="header-inner">
   <div class="logo">
     <img src="logo_otb.jpg" alt="OTB Logo">
-    Smart Pen Dashboard <span>V1.0</span>
+    Smart Pen Dashboard <span>V1.5</span>
   </div>
   <div class="conn-row">
     <div class="auto-refresh">
@@ -804,9 +804,9 @@ body.theme-light .history-row.head{background:#fff}
 
       <div id="ovConnected">
         <div class="grid4 mb8">
-          <!-- Widget: Uso de Memória -->
+          <!-- Widget: RAM -->
           <div class="chart-card">
-            <div class="chart-title" data-i18n="memory_usage">Uso de Memória</div>
+            <div class="chart-title">RAM</div>
             <div class="gauge-wrap">
               <svg viewBox="0 0 100 100" class="gauge">
                 <circle class="gauge-bg" cx="50" cy="50" r="40"></circle>
@@ -814,19 +814,19 @@ body.theme-light .history-row.head{background:#fff}
               </svg>
               <div class="gauge-center" id="ov-used-text">—</div>
             </div>
-            <div class="chart-sub" id="ov-used-sub">0 KB</div>
+            <div class="chart-sub" id="ov-used-sub">— / — KB</div>
           </div>
-          <!-- Widget: Memória Livre -->
+          <!-- Widget: ROM (Flash) -->
           <div class="chart-card">
-            <div class="chart-title" data-i18n="free_memory">Memória Livre</div>
+            <div class="chart-title">ROM (Flash)</div>
             <div class="gauge-wrap">
               <svg viewBox="0 0 100 100" class="gauge">
                 <circle class="gauge-bg" cx="50" cy="50" r="40"></circle>
-                <circle class="gauge-bar" id="gauge-free" cx="50" cy="50" r="40"></circle>
+                <circle class="gauge-bar" id="gauge-free" cx="50" cy="50" r="40" style="stroke:#3fb950"></circle>
               </svg>
               <div class="gauge-center" id="ov-free-text">—</div>
             </div>
-            <div class="chart-sub" id="ov-free-sub">0 KB</div>
+            <div class="chart-sub" id="ov-free-sub">— / — KB</div>
           </div>
           <!-- Widget: Tasks Ativas -->
           <div class="chart-card">
@@ -1853,6 +1853,8 @@ const Q = {
 
 // ═══════════════════════════════════════════════════════════════
 //  SERIAL MANAGER
+let gaugeRomLocked = false;   // trava o gauge ROM após primeira leitura válida
+
 // ═══════════════════════════════════════════════════════════════
 const serial = {
   port: null, reader: null, writer: null, connected: false,
@@ -2805,6 +2807,7 @@ async function doDisconnect() {
     } catch(_) {}
   }
   serial.connected = false;
+  gaugeRomLocked = false;  // permite re-leitura na próxima conexão
   // Libera Q — resolve imediatamente qualquer sendCmd pendente para não travar na reconexão
   if (serial.silenceTimer) { clearTimeout(serial.silenceTimer); serial.silenceTimer = null; }
   if (serial.silenceResolve) { const cb = serial.silenceResolve; serial.silenceResolve = null; cb(serial.buffer || ''); }
@@ -3106,7 +3109,11 @@ document.querySelectorAll('.nav-item[data-page]').forEach(el => {
     document.getElementById('page-' + el.dataset.page).classList.add('active');
     if (el.dataset.page === 'historico') historyRefreshPage();
     if (el.dataset.page === 'debuglog')  dbgRender();
-    if (el.dataset.page === 'ota' && serial.connected) otaRefreshStatus();
+    if (el.dataset.page === 'ota' && serial.connected) {
+      otaRefreshStatus();
+      // Retry após 3s: cobre o caso em que o ESP32 ainda está reconectando WiFi
+      setTimeout(() => { if (serial.connected) otaRefreshStatus(); }, 3000);
+    }
     if (el.dataset.page === 'ativacao') {
       const fwEl = document.getElementById('activ-fw');
       if (fwEl) fwEl.textContent = historyState.dock.firmwareVersion || '—';
@@ -3231,36 +3238,49 @@ async function refreshDock() {
   setVal('dk-tasks',   findKey(m, 'tasks'));
   setVal('dk-uptime',  findKey(m, 'uptime'));
   // SVG Charts Update
-  const heapLivreStr = findKey(m, 'heap livre');
-  const heapTotalStr = findKey(m, 'heap total');
-  const tasksStr = findKey(m, 'tasks');
-  const uptimeStr = findKey(m, 'uptime');
-  
+  const heapLivreStr  = findKey(m, 'heap livre');
+  const heapTotalStr  = findKey(m, 'heap total');
+  const sketchUsedStr = findKey(m, 'sketch tamanho');
+  const sketchFreeStr = findKey(m, 'sketch livre');
+  const tasksStr      = findKey(m, 'tasks');
+  const uptimeStr     = findKey(m, 'uptime');
+
   const circ = 251.2; // 2 * PI * 40
-  
+
+  // ── Gauge RAM (heap) ──────────────────────────────────────
   if (heapLivreStr && heapTotalStr) {
-    const free = parseInt(heapLivreStr);
+    const free  = parseInt(heapLivreStr);
     const total = parseInt(heapTotalStr);
-    const used = total - free;
-    const freePct = (free / total);
-    const usedPct = (used / total);
-    
+    const used  = total - free;
+    const usedPct = used / total;
+
     const elUsed = document.getElementById('gauge-used');
-    const elFree = document.getElementById('gauge-free');
-    
-    if(elUsed) {
+    if (elUsed) {
       elUsed.style.strokeDashoffset = circ - (usedPct * circ);
       elUsed.style.stroke = usedPct > 0.85 ? 'var(--red)' : usedPct > 0.6 ? 'var(--yellow)' : 'var(--accent)';
     }
-    if(elFree) {
-      elFree.style.strokeDashoffset = circ - (freePct * circ);
-      elFree.style.stroke = freePct < 0.15 ? 'var(--red)' : freePct < 0.4 ? 'var(--yellow)' : '#3fb950';
-    }
-    
     document.getElementById('ov-used-text').textContent = Math.round(usedPct * 100) + '%';
-    document.getElementById('ov-free-text').textContent = Math.round(freePct * 100) + '%';
-    document.getElementById('ov-used-sub').textContent = (used / 1024).toFixed(1) + ' KB';
-    document.getElementById('ov-free-sub').textContent = (free / 1024).toFixed(1) + ' KB';
+    document.getElementById('ov-used-sub').textContent =
+      (used / 1048576).toFixed(2) + ' / ' + (total / 1048576).toFixed(2) + ' MB';
+  }
+
+  // ── Gauge ROM/Flash — atualiza só uma vez (valor fixo após flash) ──
+  if (sketchUsedStr && sketchFreeStr && !gaugeRomLocked) {
+    const skUsed  = parseInt(sketchUsedStr);
+    const skFree  = parseInt(sketchFreeStr);
+    const skTotal = skUsed + skFree;
+    if (skUsed > 0 && skTotal > 0) {
+      const romPct = skUsed / skTotal;
+      const elRom  = document.getElementById('gauge-free');
+      if (elRom) {
+        elRom.style.strokeDashoffset = circ - (romPct * circ);
+        elRom.style.stroke = romPct > 0.9 ? 'var(--red)' : romPct > 0.75 ? 'var(--yellow)' : '#3fb950';
+      }
+      document.getElementById('ov-free-text').textContent = Math.round(romPct * 100) + '%';
+      document.getElementById('ov-free-sub').textContent =
+        (skUsed / 1048576).toFixed(2) + ' / ' + (skTotal / 1048576).toFixed(2) + ' MB';
+      gaugeRomLocked = true;
+    }
   }
 
   if (tasksStr) {
@@ -3746,7 +3766,7 @@ function otaHandleLine(line) {
     setVal('ota-partition', parts['running'] || '—');
     // Mostra badge de update disponível se versões diferentes
     const fw = parts['fw'] || '', lat = parts['latest'] || '';
-    const avail = fw && lat && lat !== '-' && fw !== lat;
+    const avail = fw && lat && lat !== '-' && fw.toLowerCase() !== lat.toLowerCase();
     const updBadge = document.getElementById('ota-update-badge');
     if (updBadge) updBadge.style.display = avail ? 'block' : 'none';
     const navBadge = document.getElementById('otaBadge');

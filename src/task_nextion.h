@@ -1,11 +1,24 @@
 #pragma once
 // =============================================================
 //  task_nextion.h — V5
-//  Tela status_pen: IdPen1 StatusPen1 CiclosPen1 VidaPen1 SerialPen1
-//  Tela dock_status: p0.pic=4 + dados Dockstation
-//  Tela erros: tErroCod1..5 tErroDesc1..5 tErroTotal
-//  tStatus: codigo do erro ativo em todas as paginas
-//  Pagina configs (pg4): btn_purgar(6) btn_val1(10) btn_val2(11) btn_val3(12)
+//  Paginas HMI:
+//    dock_status     — tela principal: Uptime, tVersao, Tasks, HallSens,
+//                      barraVermelho/Azul/Amarelo, RecargasHj, tRecarga,
+//                      tDuty, tStatus, p0
+//    status_dock     — info sistema: Freq, HeapLiv, HeapMin, HeapTot,
+//                      Sram, Flash, SketTam, SketLiv, Chip, Nucleos,
+//                      Wifi, HallSens, Tasks, Uptime, Serie
+//    status_pen      — IdPen1-3, StatusPen1-3, CiclosPen1-3, VidaPen1-3,
+//                      SerialPen1-3
+//    status_cart     — IdCart1-3, StatusCart1-3, CiclosCart1-3,
+//                      VidaCart1-3, SerialCart1-3
+//    erros           — tErroCod1-5, tErroTotal, tStatus
+//                      Botoes: btn_purgar(6), btn_val1(10), btn_val2(11),
+//                              btn_val3(12)  — pagina 4
+//    testes_manuais  — valvulas, sensores RAW, purga, PWM bomba
+//                      Slider hDuty envia "PWM=XX\xFF\xFF\xFF" via serial
+//                      Botoes m0/m1/m2 togglem valvulas 1/2/3
+//                      Botao m3 aciona purga
 // =============================================================
 
 #include <Arduino.h>
@@ -16,13 +29,39 @@
 #include "esp_system.h"
 
 // =========================
-// IDs DA PÁGINA configs
+// IDs DA PÁGINA com botoes de controle (pagina erros, id=4)
 // =========================
-#define NEXTION_PAGE_CONFIGS    4
+#define NEXTION_PAGE_CONTROLS   4
 #define NEXTION_ID_BTN_PURGAR   6
 #define NEXTION_ID_BTN_VAL1    10
 #define NEXTION_ID_BTN_VAL2    11
 #define NEXTION_ID_BTN_VAL3    12
+
+// =========================
+// TELA TESTES MANUAIS
+// Numero da pagina: verificar no monitor serial ([Nextion] Page=XX).
+// O firmware descobre via sendme; ajuste NEXTION_PAGE_TESTES_MANUAIS
+// se o numero nao bater com o que o monitor mostra.
+//
+// IDs dos componentes (ordem sequencial no Nextion Editor):
+//   hDuty(3) slider PWM — envia "PWM=XX\xFF\xFF\xFF" ao soltar
+//   m0(6)   hotspot valvula 1
+//   m1(9)   hotspot valvula 2
+//   m2(10)  hotspot valvula 3
+//   m3(21)  hotspot purga
+//   t0(11)  sensor CH0 raw
+//   t1(12)  sensor CH1 raw
+//   t2(13)  sensor CH2 raw
+//   t3(18)  sensor CH0 pF
+//   t4(19)  sensor CH1 pF
+//   t11(17) sensor CH2 pF
+//   tDuty(4) duty% atual
+// =========================
+#define NEXTION_PAGE_TESTES_MANUAIS  14   // ajuste se necessario
+#define NX_TM_M0    6   // toggle valvula 1
+#define NX_TM_M1    9   // toggle valvula 2
+#define NX_TM_M2   10   // toggle valvula 3
+#define NX_TM_M3   21   // acionar purga
 
 // =========================
 // HELPERS
@@ -82,27 +121,130 @@ static const char* _rechargeStatusTexto(RechargeInfo::Status status) {
   }
 }
 
-// =========================
-// LIMPA / MOSTRA TAG
-// =========================
-static void _nextionLimpar() {
-  _setText("IdPen1",     "N/A");
-  _setText("StatusPen1", "N/A");
-  _setText("CiclosPen1", "N/A");
-  _setText("VidaPen1",   "N/A");
-  _setText("SerialPen1", "N/A");
-}
-
-static void _nextionMostrar(const TagData &d) {
-  _setText("IdPen1",     d.id);
-  _setText("StatusPen1", _statusTexto(d.status).c_str());
-  _setText("CiclosPen1", String(d.ciclos).c_str());
-  _setText("VidaPen1",   String(d.vida).c_str());
-  _setText("SerialPen1", d.serial);
-}
+// Estado de tracking de pagina e valvulas (testes_manuais)
+static uint8_t _pageAtual   = 0xFF;
+static bool    _val1Aberta  = false;
+static bool    _val2Aberta  = false;
+static bool    _val3Aberta  = false;
 
 // =========================
-// DADOS DO SISTEMA — dock_status
+// LIMPA / MOSTRA TAG — por leitor
+// leitores 0-2 = canetas (IdPen1-3)
+// leitores 3-5 = cartuchos (IdCart1-3)
+// =========================
+static const char* _penIdComp[]     = {"IdPen1",     "IdPen2",     "IdPen3"    };
+static const char* _penStComp[]     = {"StatusPen1", "StatusPen2", "StatusPen3"};
+static const char* _penCiComp[]     = {"CiclosPen1", "CiclosPen2", "CiclosPen3"};
+static const char* _penViComp[]     = {"VidaPen1",   "VidaPen2",   "VidaPen3"  };
+static const char* _penSeComp[]     = {"SerialPen1", "SerialPen2", "SerialPen3"};
+
+static const char* _cartIdComp[]    = {"IdCart1",     "IdCart2",     "IdCart3"    };
+static const char* _cartStComp[]    = {"StatusCart1", "StatusCart2", "StatusCart3"};
+static const char* _cartCiComp[]    = {"CiclosCart1", "CiclosCart2", "CiclosCart3"};
+static const char* _cartViComp[]    = {"VidaCart1",   "VidaCart2",   "VidaCart3"  };
+static const char* _cartSeComp[]    = {"SerialCart1", "SerialCart2", "SerialCart3"};
+
+static void _nextionLimparReader(uint8_t readerIdx) {
+  if (readerIdx < 3) {
+    _setText(_penIdComp[readerIdx], "N/A");
+    _setText(_penStComp[readerIdx], "N/A");
+    _setText(_penCiComp[readerIdx], "--");
+    _setText(_penViComp[readerIdx], "--");
+    _setText(_penSeComp[readerIdx], "--");
+  } else if (readerIdx < 6) {
+    uint8_t c = readerIdx - 3;
+    _setText(_cartIdComp[c], "N/A");
+    _setText(_cartStComp[c], "N/A");
+    _setText(_cartCiComp[c], "--");
+    _setText(_cartViComp[c], "--");
+    _setText(_cartSeComp[c], "--");
+  }
+}
+
+static void _nextionMostrarReader(uint8_t readerIdx, const TagData &d) {
+  char tmp[32];
+  if (readerIdx < 3) {
+    _setText(_penIdComp[readerIdx], d.id);
+    _setText(_penStComp[readerIdx], _statusTexto(d.status).c_str());
+    snprintf(tmp, sizeof(tmp), "%u", d.ciclos);
+    _setText(_penCiComp[readerIdx], tmp);
+    snprintf(tmp, sizeof(tmp), "%u", d.vida);
+    _setText(_penViComp[readerIdx], tmp);
+    _setText(_penSeComp[readerIdx], d.serial);
+  } else if (readerIdx < 6) {
+    uint8_t c = readerIdx - 3;
+    _setText(_cartIdComp[c], d.id);
+    _setText(_cartStComp[c], _statusTexto(d.status).c_str());
+    snprintf(tmp, sizeof(tmp), "%u", d.ciclos);
+    _setText(_cartCiComp[c], tmp);
+    snprintf(tmp, sizeof(tmp), "%u", d.vida);
+    _setText(_cartViComp[c], tmp);
+    _setText(_cartSeComp[c], d.serial);
+  }
+}
+
+static void _nextionLimparTodos() {
+  for (uint8_t i = 0; i < 6; i++) _nextionLimparReader(i);
+}
+
+// Compatibilidade com código legado que usa reader 0
+static void _nextionLimpar()                   { _nextionLimparReader(0); }
+static void _nextionMostrar(const TagData &d)  { _nextionMostrarReader(0, d); }
+
+// =========================
+// TELA PRINCIPAL — dock_status
+// Atualiza os componentes reais da tela principal do HMI
+// =========================
+static void _enviarDockScreen() {
+  char tmp[64];
+  uint32_t s = millis() / 1000;
+
+  // Versao firmware
+  _setText("tVersao", FIRMWARE_VERSION);
+
+  // Uptime
+  snprintf(tmp, sizeof(tmp), "%02lu:%02lu:%02lu",
+           (unsigned long)(s / 3600),
+           (unsigned long)((s % 3600) / 60),
+           (unsigned long)(s % 60));
+  _setText("Uptime", tmp);
+
+  // Sistema
+  snprintf(tmp, sizeof(tmp), "%d", (int)uxTaskGetNumberOfTasks());
+  _setText("Tasks", tmp);
+  snprintf(tmp, sizeof(tmp), "%d", hallRead());
+  _setText("HallSens", tmp);
+
+  // Niveis dos cartuchos (barras de progresso 0-100)
+  _setValue("barraVermelho", (uint32_t)gCartLevel[1]);
+  _setValue("barraAzul",     (uint32_t)gCartLevel[2]);
+  _setValue("barraAmarelo",  (uint32_t)gCartLevel[3]);
+
+  // Contador de recargas hoje
+  snprintf(tmp, sizeof(tmp), "%u", (unsigned)gRechargeCount);
+  _setText("RecargasHj", tmp);
+
+  // Estado da recarga e duty da bomba
+  if (xSemaphoreTake(mutexRecharge, pdMS_TO_TICKS(20)) == pdTRUE) {
+    _setText("tRecarga", _rechargeStatusTexto(gRecharge.status));
+    snprintf(tmp, sizeof(tmp), "%u%%", (unsigned)gRecharge.dutyPct);
+    _setText("tDuty", tmp);
+    xSemaphoreGive(mutexRecharge);
+  }
+
+  // Status / erro ativo
+  uint8_t primeiro = erroGetPrimeiro();
+  if (primeiro == 0) {
+    _setText("tStatus", "Pronto");
+  } else {
+    snprintf(tmp, sizeof(tmp), "E%03d", erroGetCodigo(primeiro));
+    _setText("tStatus", tmp);
+  }
+}
+
+// =========================
+// DADOS DO SISTEMA — status_dock
+// Atualiza a pagina de info detalhada do sistema
 // =========================
 static void _enviarDadosDock() {
   char tmp[64];
@@ -163,6 +305,7 @@ static void _enviarDadosDock() {
   nx("Uptime", tmp);
 
   nx("Serie", gSerialDock);
+  nx("tVersao", FIRMWARE_VERSION);
 }
 
 // =========================
@@ -182,6 +325,7 @@ static void _enviarErros() {
   const char* descs[5] = {nullptr};
   uint8_t count = erroGetAtivos(codigos, descs, 5);
 
+  // tStatus: indicador de erro visivel em todas as paginas que o contem
   uint8_t primeiro = erroGetPrimeiro();
   if (primeiro == 0) {
     nx("tStatus", "Pronto");
@@ -190,20 +334,18 @@ static void _enviarErros() {
     nx("tStatus", tmp);
   }
 
+  // Codigos na pagina erros
   const char* cf[] = {"tErroCod1", "tErroCod2", "tErroCod3", "tErroCod4", "tErroCod5"};
-  const char* df[] = {"tErroDesc1", "tErroDesc2", "tErroDesc3", "tErroDesc4", "tErroDesc5"};
-
   for (uint8_t i = 0; i < 5; i++) {
     if (i < count) {
       snprintf(tmp, sizeof(tmp), "E%03d", codigos[i]);
       nx(cf[i], tmp);
-      nx(df[i], descs[i] ? descs[i] : "");
     } else {
       nx(cf[i], "----");
-      nx(df[i], "");
     }
   }
 
+  // Total
   if (count == 0) {
     nx("tErroTotal", "Nenhum erro ativo");
   } else {
@@ -213,156 +355,129 @@ static void _enviarErros() {
 }
 
 // =========================
-// DASHBOARD RESUMIDA
-// Pagina nova sugerida: dashboard
+// ATUALIZA TODOS OS LEITORES (chamado no refresh periodico)
 // =========================
-static void _enviarDashboard() {
-  char tmp[64];
-  uint8_t primeiro = erroGetPrimeiro();
-  uint16_t codigos[5] = {0};
-  const char* descs[5] = {nullptr};
-  uint8_t errCount = erroGetAtivos(codigos, descs, 5);
-  (void)descs;
-
-  if (primeiro == 0) {
-    _setText("dbStatus", "Pronto");
-  } else {
-    snprintf(tmp, sizeof(tmp), "E%03d", erroGetCodigo(primeiro));
-    _setText("dbStatus", tmp);
-  }
-
-  snprintf(tmp, sizeof(tmp), "%u", errCount);
-  _setText("dbErrCount", tmp);
-  _setText("dbSerial", gSerialDock);
-
-  snprintf(tmp, sizeof(tmp), "%lu", (unsigned long)esp_get_free_heap_size());
-  _setText("dbHeap", tmp);
-
-  snprintf(tmp, sizeof(tmp), "%d", (int)uxTaskGetNumberOfTasks());
-  _setText("dbTasks", tmp);
-
-  uint32_t s = millis() / 1000;
-  snprintf(tmp, sizeof(tmp), "%02lu:%02lu:%02lu",
-           (unsigned long)(s / 3600),
-           (unsigned long)((s % 3600) / 60),
-           (unsigned long)(s % 60));
-  _setText("dbUptime", tmp);
-
-  if (xSemaphoreTake(mutexTag, pdMS_TO_TICKS(20)) == pdTRUE) {
-    if (gTag.presente || gTag.cacheValido) {
-      _setText("dbPenId", gTag.cache.id);
-      _setText("dbPenStatus", _statusTexto(gTag.cache.status).c_str());
-      snprintf(tmp, sizeof(tmp), "%u", gTag.cache.ciclos);
-      _setText("dbPenCycles", tmp);
-      snprintf(tmp, sizeof(tmp), "%u", gTag.cache.vida);
-      _setText("dbPenLife", tmp);
-      _setText("dbPenSerial", gTag.cache.serial);
-    } else {
-      _setText("dbPenId", "N/A");
-      _setText("dbPenStatus", "Sem tag");
-      _setText("dbPenCycles", "--");
-      _setText("dbPenLife", "--");
-      _setText("dbPenSerial", "--");
+static void _atualizarLeitores() {
+  if (xSemaphoreTake(mutexTag, pdMS_TO_TICKS(30)) == pdTRUE) {
+    for (uint8_t i = 0; i < 6; i++) {
+      if (gTagReaders[i].presente && gTagReaders[i].valid) {
+        _nextionMostrarReader(i, gTagReaders[i].data);
+      } else {
+        _nextionLimparReader(i);
+      }
     }
     xSemaphoreGive(mutexTag);
-  }
-
-  if (xSemaphoreTake(mutexNivel, pdMS_TO_TICKS(20)) == pdTRUE) {
-    const char* txtIds[3] = { "dbCh0", "dbCh1", "dbCh2" };
-    const char* barIds[3] = { "jCh0", "jCh1", "jCh2" };
-
-    for (uint8_t ch = 0; ch < 3; ch++) {
-      if (!gNivel[ch].leituraOk) {
-        _setText(txtIds[ch], "OFF");
-        _setValue(barIds[ch], 0);
-        continue;
-      }
-
-      const uint32_t nivel = (uint32_t)_nxClamp(gNivel[ch].nivelPct, 0.0f, 100.0f);
-      snprintf(tmp, sizeof(tmp), "%lu%%", (unsigned long)nivel);
-      _setText(txtIds[ch], tmp);
-      _setValue(barIds[ch], nivel);
-    }
-    xSemaphoreGive(mutexNivel);
-  }
-
-  if (xSemaphoreTake(mutexRecharge, pdMS_TO_TICKS(20)) == pdTRUE) {
-    _setText("dbRechargeState", _rechargeStatusTexto(gRecharge.status));
-    snprintf(tmp, sizeof(tmp), "CH%u", (unsigned)gRecharge.channel + 1);
-    _setText("dbRechargeChannel", tmp);
-    snprintf(tmp, sizeof(tmp), "%.0f%%", gRecharge.levelPct);
-    _setText("dbRechargeLevel", tmp);
-    snprintf(tmp, sizeof(tmp), "%u%%", gRecharge.dutyPct);
-    _setText("dbRechargeDuty", tmp);
-    _setValue("jRecharge", gRecharge.dutyPct);
-    xSemaphoreGive(mutexRecharge);
   }
 }
 
 // =========================
-// ENVIA IMAGEM HOME
+// ENVIA IMAGEM HOME (resposta ao evento HOME:ABRIU)
 // =========================
 static void _verificarHome() {
   bool tcaOk = false;
-  // Timeout 400 ms: taskSensor pode segurar mutexI2C ate 300 ms (AD7747)
   if (xSemaphoreTake(mutexI2C, pdMS_TO_TICKS(400)) == pdTRUE) {
     Wire.beginTransmission(TCA_ADDR);
     tcaOk = (Wire.endTransmission() == 0);
     xSemaphoreGive(mutexI2C);
   }
-
   bool nfcOk = false;
   if (xSemaphoreTake(mutexTag, pdMS_TO_TICKS(50)) == pdTRUE) {
     nfcOk = gTag.nfcOk;
     xSemaphoreGive(mutexTag);
   }
-
   if (tcaOk && nfcOk) {
     _nextionCmd("p0.pic=4");
   }
 }
 
 // =========================
-// VERIFICACAO DE HARDWARE
+// TESTES MANUAIS — atualiza sensores RAW e duty na tela
+// Chamado apenas quando _pageAtual == NEXTION_PAGE_TESTES_MANUAIS
 // =========================
-static bool _verificarHardware() {
-  bool tcaOk = false;
-  // Timeout 400 ms: taskSensor pode segurar mutexI2C ate 300 ms (AD7747)
-  if (xSemaphoreTake(mutexI2C, pdMS_TO_TICKS(400)) == pdTRUE) {
-    Wire.beginTransmission(TCA_ADDR);
-    tcaOk = (Wire.endTransmission() == 0);
-    xSemaphoreGive(mutexI2C);
+static void _enviarTestesManuais() {
+  char tmp[32];
+
+  // Leituras dos sensores por canal (t0=CH0 raw, t1=CH1 raw, t2=CH2 raw)
+  if (xSemaphoreTake(mutexNivel, pdMS_TO_TICKS(20)) == pdTRUE) {
+    for (uint8_t ch = 0; ch < 3; ch++) {
+      snprintf(tmp, sizeof(tmp), "%ld", (long)gNivel[ch].rawAtual);
+      const char* txComp[] = {"t0", "t1", "t2"};
+      _setText(txComp[ch], tmp);
+
+      // t3=CH0 pF, t4=CH1 pF, t11=CH2 pF
+      snprintf(tmp, sizeof(tmp), "%.3fpF", gNivel[ch].pFAtual);
+      const char* tfComp[] = {"t3", "t4", "t11"};
+      _setText(tfComp[ch], tmp);
+    }
+    xSemaphoreGive(mutexNivel);
   }
 
-  bool nfcOk = false;
-  if (xSemaphoreTake(mutexTag, pdMS_TO_TICKS(50)) == pdTRUE) {
-    nfcOk = gTag.nfcOk;
-    xSemaphoreGive(mutexTag);
-  }
-
-  return (tcaOk && nfcOk);
+  // Duty atual da bomba
+  snprintf(tmp, sizeof(tmp), "%u%%", (unsigned)gBombaDuty);
+  _setText("tDuty", tmp);
 }
 
 // =========================
 // PROCESSA TOUCH EVENT 0x65
-// Despacha ActCmd para taskAtuadores via qActCmd
+// Pagina NEXTION_PAGE_CONTROLS: botoes erros/controle
+// Pagina NEXTION_PAGE_TESTES_MANUAIS: valvulas, purga
 // =========================
 static void _processarTouch(uint8_t page, uint8_t compID, uint8_t event) {
-  if (page != NEXTION_PAGE_CONFIGS || event != 0x01) return;
+  if (event != 0x01) return;
 
-  ActCmd cmd;
-  switch (compID) {
-    case NEXTION_ID_BTN_PURGAR: cmd.type = ActCmd::ACT_PURGAR;    break;
-    case NEXTION_ID_BTN_VAL1:   cmd.type = ActCmd::ACT_VALVULA_1; break;
-    case NEXTION_ID_BTN_VAL2:   cmd.type = ActCmd::ACT_VALVULA_2; break;
-    case NEXTION_ID_BTN_VAL3:   cmd.type = ActCmd::ACT_VALVULA_3; break;
-    default: return;
+  // ── Pagina erros/controle ────────────────────────────────
+  if (page == NEXTION_PAGE_CONTROLS) {
+    ActCmd cmd;
+    switch (compID) {
+      case NEXTION_ID_BTN_PURGAR: cmd.type = ActCmd::ACT_PURGAR;    break;
+      case NEXTION_ID_BTN_VAL1:   cmd.type = ActCmd::ACT_VALVULA_1; break;
+      case NEXTION_ID_BTN_VAL2:   cmd.type = ActCmd::ACT_VALVULA_2; break;
+      case NEXTION_ID_BTN_VAL3:   cmd.type = ActCmd::ACT_VALVULA_3; break;
+      default: return;
+    }
+    xQueueSend(qActCmd, &cmd, 0);
+    Serial.printf("[Nextion] Touch controls page=%d comp=%d -> ActCmd=%d\n",
+                  page, compID, (int)cmd.type);
+    logdbPublishf("Nextion", "Touch", LOG_INFO, "Controls p=%u c=%u", (unsigned)page, (unsigned)compID);
+    return;
   }
 
-  xQueueSend(qActCmd, &cmd, 0);
-  Serial.printf("[Nextion] Touch page=%d comp=%d -> ActCmd=%d\n",
-                page, compID, (int)cmd.type);
-  logdbPublishf("Nextion", "Touch", LOG_INFO, "Touch page=%u comp=%u", (unsigned)page, (unsigned)compID);
+  // ── Pagina testes_manuais ────────────────────────────────
+  if (page == NEXTION_PAGE_TESTES_MANUAIS) {
+    ControleCmd cc;
+    switch (compID) {
+      case NX_TM_M0:
+        _val1Aberta = !_val1Aberta;
+        cc.type    = _val1Aberta ? ControleCmd::VALVULA_ON : ControleCmd::VALVULA_OFF;
+        cc.payload = 1;
+        xQueueSend(qControleCmd, &cc, 0);
+        Serial.printf("[Nextion] Valvula1 %s\n", _val1Aberta ? "ABERTA" : "FECHADA");
+        break;
+      case NX_TM_M1:
+        _val2Aberta = !_val2Aberta;
+        cc.type    = _val2Aberta ? ControleCmd::VALVULA_ON : ControleCmd::VALVULA_OFF;
+        cc.payload = 2;
+        xQueueSend(qControleCmd, &cc, 0);
+        Serial.printf("[Nextion] Valvula2 %s\n", _val2Aberta ? "ABERTA" : "FECHADA");
+        break;
+      case NX_TM_M2:
+        _val3Aberta = !_val3Aberta;
+        cc.type    = _val3Aberta ? ControleCmd::VALVULA_ON : ControleCmd::VALVULA_OFF;
+        cc.payload = 3;
+        xQueueSend(qControleCmd, &cc, 0);
+        Serial.printf("[Nextion] Valvula3 %s\n", _val3Aberta ? "ABERTA" : "FECHADA");
+        break;
+      case NX_TM_M3: {
+        ActCmd ac;
+        ac.type = ActCmd::ACT_PURGAR;
+        xQueueSend(qActCmd, &ac, 0);
+        Serial.println("[Nextion] Purga acionada");
+        break;
+      }
+      default: break;
+    }
+    logdbPublishf("Nextion", "Touch", LOG_INFO, "Testes p=%u c=%u", (unsigned)page, (unsigned)compID);
+  }
 }
 
 // =========================
@@ -373,15 +488,16 @@ void taskNextion(void *param) {
   Serial2.begin(9600, SERIAL_8N1, NEXTION_RX, NEXTION_TX);
   vTaskDelay(pdMS_TO_TICKS(800));
 
-  // Wire ja inicializado em setup() — nao reinicializar aqui
-  if (_verificarHardware()) {
-    _nextionCmd("page dock_status");
-    vTaskDelay(pdMS_TO_TICKS(300));
-  }
+  // Navega para a tela principal — sem aguardar hardware (a tela ja inicia)
+  _nextionCmd("page dock_status");
+  vTaskDelay(pdMS_TO_TICKS(300));
+  _setText("tVersao", FIRMWARE_VERSION);
 
-  _nextionLimpar();
+  // Limpa todos os slots de canetas e cartuchos
+  _nextionLimparTodos();
 
-  uint32_t ultimoRefresh = 0;
+  uint32_t ultimoRefresh  = 0;
+  uint32_t ultimoSendme   = 0;
   TagEvent ev;
 
   for (;;) {
@@ -389,66 +505,108 @@ void taskNextion(void *param) {
     if (millis() - ultimoRefresh >= 2000) {
       ultimoRefresh = millis();
 
-      bool hwOk = _verificarHardware();
+      _enviarDockScreen();   // tela principal dock_status
+      _enviarDadosDock();    // pagina status_dock (info sistema)
+      _enviarErros();        // pagina erros
+      _atualizarLeitores();  // todos os leitores NFC (status_pen / status_cart)
 
-      if (hwOk) {
-        _nextionCmd("p0.pic=4");
+      // Sensores e atuadores da tela testes_manuais (so envia quando ativa)
+      if (_pageAtual == NEXTION_PAGE_TESTES_MANUAIS) {
+        _enviarTestesManuais();
       }
-
-      _enviarDadosDock();
-      _enviarErros();
-      _enviarDashboard();
     }
 
-    // ── Le bytes do Nextion: touch events (binario) e texto ──
+    // ── sendme a cada 5s para rastrear pagina atual ───────
+    if (millis() - ultimoSendme >= 5000) {
+      ultimoSendme = millis();
+      _nextionCmd("sendme");
+    }
+
+    // ── Le bytes do Nextion ───────────────────────────────
     {
-      static char    rxBuf[32];
+      static char    rxBuf[64];
       static uint8_t rxIdx   = 0;
       static uint8_t ffCount = 0;
 
-      // Maquina de estados para pacote binario 0x65
-      static uint8_t touchBuf[7];
-      static uint8_t touchIdx = 0;
-      static bool    emTouch  = false;
+      // Parser de pacotes binarios (touch 0x65, page 0x66)
+      static uint8_t pktBuf[8];
+      static uint8_t pktIdx   = 0;
+      static uint8_t pktLen   = 0;   // comprimento esperado do pacote
+      static bool    emPkt    = false;
 
       while (Serial2.available()) {
         uint8_t c = (uint8_t)Serial2.read();
 
-        // Descarta bytes de status conhecidos que nao sao pacotes uteis
-        if (!emTouch && c == 0x1A) continue;
+        // Ignora byte de keep-alive 0x1A
+        if (!emPkt && c == 0x1A) continue;
 
-        // Inicio de touch event
-        if (!emTouch && c == 0x65) {
-          emTouch      = true;
-          touchBuf[0]  = 0x65;
-          touchIdx     = 1;
-          rxIdx        = 0;
-          ffCount      = 0;
+        // Inicio de pacote binario
+        if (!emPkt && (c == 0x65 || c == 0x66)) {
+          emPkt      = true;
+          pktBuf[0]  = c;
+          pktLen     = (c == 0x65) ? 7 : 5;  // touch=7 bytes, page=5 bytes
+          pktIdx     = 1;
+          rxIdx      = 0;
+          ffCount    = 0;
           continue;
         }
 
-        // Acumulando touch event: 0x65 page comp event 0xFF 0xFF 0xFF
-        if (emTouch) {
-          touchBuf[touchIdx++] = c;
-          if (touchIdx == 7) {
-            emTouch = false;
-            if (touchBuf[4] == 0xFF && touchBuf[5] == 0xFF && touchBuf[6] == 0xFF) {
-              _processarTouch(touchBuf[1], touchBuf[2], touchBuf[3]);
+        if (emPkt) {
+          pktBuf[pktIdx++] = c;
+          if (pktIdx >= pktLen) {
+            emPkt = false;
+            // Verifica terminador 0xFF 0xFF 0xFF
+            bool ok = (pktBuf[pktLen-3] == 0xFF &&
+                       pktBuf[pktLen-2] == 0xFF &&
+                       pktBuf[pktLen-1] == 0xFF);
+            if (ok) {
+              if (pktBuf[0] == 0x65) {
+                // Touch event: [0x65][page][comp][event][FF FF FF]
+                _processarTouch(pktBuf[1], pktBuf[2], pktBuf[3]);
+              } else if (pktBuf[0] == 0x66) {
+                // Page event: [0x66][page_id][FF FF FF]
+                uint8_t pid = pktBuf[1];
+                if (pid != _pageAtual) {
+                  Serial.printf("[Nextion] Page=%u\n", (unsigned)pid);
+                  // Ao entrar em testes_manuais, reseta estado das valvulas
+                  if (pid == NEXTION_PAGE_TESTES_MANUAIS) {
+                    _val1Aberta = false;
+                    _val2Aberta = false;
+                    _val3Aberta = false;
+                  }
+                  _pageAtual = pid;
+                }
+              }
             }
-            touchIdx = 0;
+            pktIdx = 0;
+            pktLen = 0;
           }
           continue;
         }
 
-        // Texto terminado por 0xFF 0xFF 0xFF (ex: "HOME:ABRIU")
+        // Texto terminado por 0xFF 0xFF 0xFF
         if (c == 0xFF) {
           ffCount++;
           if (ffCount >= 3) {
             rxBuf[rxIdx] = '\0';
-            String cmd = String(rxBuf);
+            String msg = String(rxBuf);
             rxIdx   = 0;
             ffCount = 0;
-            if (cmd == "HOME:ABRIU") _verificarHome();
+
+            if (msg == "HOME:ABRIU") {
+              _verificarHome();
+            } else if (msg.startsWith("PWM=")) {
+              // Slider hDuty em testes_manuais enviou: PWM=XX
+              int duty = msg.substring(4).toInt();
+              if (duty < 0)   duty = 0;
+              if (duty > 100) duty = 100;
+              ControleCmd cc;
+              cc.type    = ControleCmd::BOMBA_DUTY;
+              cc.payload = (uint8_t)duty;
+              xQueueSend(qControleCmd, &cc, 0);
+              Serial.printf("[Nextion] PWM slider=%d%%\n", duty);
+              logdbPublishf("Nextion", "PWM", LOG_INFO, "duty=%d", duty);
+            }
           }
         } else {
           ffCount = 0;
@@ -461,22 +619,26 @@ void taskNextion(void *param) {
       }
     }
 
-    // ── Eventos de tag ────────────────────────────────────
+    // ── Eventos de tag (queue taskNFC → taskNextion) ─────
     if (xQueueReceive(qNextionData, &ev, pdMS_TO_TICKS(500)) == pdTRUE) {
       switch (ev.type) {
         case TagEvent::TAG_PRESENTE:
         case TagEvent::TAG_LIDA:
         case TagEvent::TAG_GRAVADA:
         case TagEvent::TAG_RESETADA:
-          _nextionMostrar(ev.data);
+          _nextionMostrarReader(ev.readerIdx, ev.data);
           break;
 
         case TagEvent::TAG_REMOVIDA:
-          _nextionLimpar();
+          _nextionLimparReader(ev.readerIdx);
           break;
 
         case TagEvent::TAG_ERRO:
-          _setText("StatusPen1", "Erro");
+          if (ev.readerIdx < 3) {
+            _setText(_penStComp[ev.readerIdx], "Erro");
+          } else if (ev.readerIdx < 6) {
+            _setText(_cartStComp[ev.readerIdx - 3], "Erro");
+          }
           break;
 
         default:

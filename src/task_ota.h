@@ -553,6 +553,12 @@ void taskOTA(void *param) {
         prefs.getString("ssid", savedSsid, sizeof(savedSsid));
         prefs.end();
 
+        // Reconecta WiFi se credenciais estao salvas e nao esta conectado
+        if (strcmp(savedSsid, "nao_configurado") != 0 &&
+            WiFi.status() != WL_CONNECTED) {
+          _otaEnsureWifi();
+        }
+
         OtaStateEnum st = OTA_STATE_IDLE;
         bool pendVal = false;
         char latVer[16] = "-";
@@ -586,7 +592,7 @@ void taskOTA(void *param) {
         // WiFi permanece conectado
 
         if (found) {
-          bool available = (strcmp(latestVer, FIRMWARE_VERSION) != 0);
+          bool available = (strcasecmp(latestVer, FIRMWARE_VERSION) != 0);
           if (xSemaphoreTake(mutexOta, pdMS_TO_TICKS(100)) == pdTRUE) {
             strncpy(gOtaStatus.latestVersion, latestVer,
                     sizeof(gOtaStatus.latestVersion) - 1);
