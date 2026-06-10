@@ -337,8 +337,8 @@ static void _menuDiag() {
 
   // ── PN532 SPI — toma mutex para nao conflitar com taskNFC ─
   Serial.println("--- NFC SPI ---");
-  const uint8_t nfcCS[]    = {13, 14, 4, 5, 15, 2};
-  const char*   nfcNomes[] = {"D13","D14","D4 ","D5 ","D15","D2 "};
+  const uint8_t nfcCS[]    = {13, 14, 4, 5, 15, 32};
+  const char*   nfcNomes[] = {"D13","D14","D4 ","D5 ","D15","D32"};
 
   if (xSemaphoreTake(mutexSPI, pdMS_TO_TICKS(3000)) == pdTRUE) {
     for (uint8_t i = 0; i < 6; i++) {
