@@ -153,7 +153,8 @@ static bool _otaCheckGithub(char *latestVer, size_t verLen,
                              char *downloadUrl, size_t urlLen) {
   char path[128];
   snprintf(path, sizeof(path),
-    "/%s/%s/main/firmware/version.json", OTA_GITHUB_OWNER, OTA_GITHUB_REPO);
+    "/%s/%s/main/firmware/version.json?t=%lu",
+    OTA_GITHUB_OWNER, OTA_GITHUB_REPO, (unsigned long)esp_random());
 
   WiFiClientSecure *client = new WiFiClientSecure();
   client->setInsecure();
