@@ -127,6 +127,20 @@ static bool    _val1Aberta  = false;
 static bool    _val2Aberta  = false;
 static bool    _val3Aberta  = false;
 
+// ── Dock_status: componentes por slot de cartucho ─────────────────────────
+// readers NFC 3/4/5 = cartuchos Vermelho/Azul/Verde (gTagReaders[c+3])
+static const char* _dsPic[]   = { "p2",  "p3",  "p4"  };
+static const int   _dsPicOk[] = {  8,     6,     5    };   // pic quando presente
+static const char* _dsLA[]    = { "t2",  "t6",  "t10" };   // label A (vis)
+static const char* _dsLB[]    = { "t3",  "t7",  "t11" };   // label B (vis)
+static const char* _dsSer[]   = { "t5",  "t8",  "t12" };   // serial
+static const char* _dsCic[]   = { "t4",  "t9",  "t13" };   // ciclos
+static const char* _dsLvl[]   = { "j1",  "j2",  "j3"  };   // barra de nivel
+
+static uint8_t _dockPageId = 0xFF;  // ID da pagina dock_status (aprendido via sendme)
+static bool    _t14Blink   = false; // true = t14 pisca (todos os cartuchos presentes)
+static bool    _t14Vis     = true;  // estado atual da visibilidade de t14
+
 // =========================
 // LIMPA / MOSTRA TAG — por leitor
 // leitores 0-2 = canetas (IdPen1-3)
@@ -198,9 +212,6 @@ static void _nextionMostrar(const TagData &d)  { _nextionMostrarReader(0, d); }
 static void _enviarDockScreen() {
   char tmp[64];
   uint32_t s = millis() / 1000;
-
-  // Versao firmware
-  _setText("tVersao", FIRMWARE_VERSION);
 
   // Uptime
   snprintf(tmp, sizeof(tmp), "%02lu:%02lu:%02lu",
@@ -418,6 +429,129 @@ static void _enviarTestesManuais() {
 }
 
 // =========================
+// DOCK_STATUS — atualiza slot de cartucho individual
+// c=0/1/2 (Vermelho/Azul/Verde)
+// presente = cartucho detectado pelo NFC
+// valid    = dados NTAG lidos com sucesso
+// =========================
+static void _dockSlot(uint8_t c, bool presente, bool valid, const TagData &d) {
+  char cmd[32];
+  // Imagem: troca para presente assim que detectado (nao depende de valid)
+  snprintf(cmd, sizeof(cmd), "%s.pic=%d", _dsPic[c], presente ? _dsPicOk[c] : 7);
+  _nextionCmd(cmd);
+
+  if (presente) {
+    snprintf(cmd, sizeof(cmd), "vis %s,1", _dsLA[c]); _nextionCmd(cmd);
+    snprintf(cmd, sizeof(cmd), "vis %s,1", _dsLB[c]); _nextionCmd(cmd);
+
+    if (valid) {
+      // Dados NFC disponiveis: mostra serial (t5/t8/t12) e ciclos (t4/t9/t13)
+      snprintf(cmd, sizeof(cmd), "vis %s,1", _dsSer[c]); _nextionCmd(cmd);
+      snprintf(cmd, sizeof(cmd), "vis %s,1", _dsCic[c]); _nextionCmd(cmd);
+      _setText(_dsSer[c], d.serial[0] ? d.serial : "---");
+      char tmp[12];
+      snprintf(tmp, sizeof(tmp), "%u", (unsigned)d.ciclos);
+      _setText(_dsCic[c], tmp);
+    } else {
+      // Leitura NFC pendente: esconde serial e ciclos ate dados chegarem
+      snprintf(cmd, sizeof(cmd), "vis %s,0", _dsSer[c]); _nextionCmd(cmd);
+      snprintf(cmd, sizeof(cmd), "vis %s,0", _dsCic[c]); _nextionCmd(cmd);
+    }
+
+    // Barra de nivel: usa sensor se disponivel, senao nivel virtual
+    // Aparece assim que o cartucho e detectado (independe do NFC)
+    uint8_t lvl = (uint8_t)gCartLevel[c + 1];
+    if (xSemaphoreTake(mutexNivel, pdMS_TO_TICKS(10)) == pdTRUE) {
+      if (gNivel[c].leituraOk) {
+        float pct = gNivel[c].nivelPct;
+        lvl = (pct < 0.0f) ? 0u : (pct > 100.0f) ? 100u : (uint8_t)pct;
+      }
+      xSemaphoreGive(mutexNivel);
+    }
+    _setValue(_dsLvl[c], (uint32_t)lvl);
+  } else {
+    snprintf(cmd, sizeof(cmd), "vis %s,0", _dsLA[c]);  _nextionCmd(cmd);
+    snprintf(cmd, sizeof(cmd), "vis %s,0", _dsLB[c]);  _nextionCmd(cmd);
+    snprintf(cmd, sizeof(cmd), "vis %s,0", _dsSer[c]); _nextionCmd(cmd);
+    snprintf(cmd, sizeof(cmd), "vis %s,0", _dsCic[c]); _nextionCmd(cmd);
+    _setValue(_dsLvl[c], 0);
+  }
+}
+
+// =========================
+// DOCK_STATUS — atualiza tela principal em tempo real
+// Cartuchos, t14 status/blink, t15 versão, t16 uptime
+// Guard interno: só executa quando na pagina dock_status
+// =========================
+static void _dockStatusAtualizar() {
+  // Guarda de pagina: so executa quando o ID de dock_status foi aprendido
+  // e a pagina ativa e exatamente essa.
+  if (_dockPageId == 0xFF || _pageAtual != _dockPageId) return;
+
+  // Snapshot dos cartuchos (readers 3-5) sob mutexTag
+  bool    presente[3] = {};
+  bool    valid[3]    = {};
+  TagData data[3]     = {};
+  if (xSemaphoreTake(mutexTag, pdMS_TO_TICKS(30)) == pdTRUE) {
+    for (uint8_t c = 0; c < 3; c++) {
+      presente[c] = gTagReaders[c + 3].presente;
+      valid[c]    = gTagReaders[c + 3].valid;
+      data[c]     = gTagReaders[c + 3].data;
+    }
+    xSemaphoreGive(mutexTag);
+  } else return;
+
+  static const char* nomesCart[] = { "VERMELHO", "AZUL", "VERDE" };
+  bool allOk    = true;
+  char t14Msg[48] = "";
+
+  for (uint8_t c = 0; c < 3; c++) {
+    bool ok = presente[c] && valid[c];
+    _dockSlot(c, presente[c], valid[c], data[c]);
+    if (!ok && t14Msg[0] == '\0') {
+      snprintf(t14Msg, sizeof(t14Msg), "CART. %s AUSENTE", nomesCart[c]);
+      allOk = false;
+    }
+  }
+
+  // Erro ativo tem prioridade sobre mensagem de cartucho ausente
+  uint8_t priErr = erroGetPrimeiro();
+  if (priErr != 0) {
+    allOk = false;
+    snprintf(t14Msg, sizeof(t14Msg), "ERRO E%03d ATIVO", erroGetCodigo(priErr));
+  }
+
+  // t14: status geral
+  if (allOk) {
+    if (!_t14Blink) {
+      _setText("t14", "INSIRA A CANETA PARA RECARGA!");
+      _nextionCmd("vis t14,1");
+      _t14Vis = true;
+    }
+    _t14Blink = true;
+  } else {
+    _t14Blink = false;
+    _setText("t14", t14Msg);
+    _nextionCmd("vis t14,1");
+    _t14Vis = true;
+  }
+
+  // t15: versao do firmware
+  _setText("t15", FIRMWARE_VERSION);
+
+  // t16: uptime hh:mm:ss
+  {
+    char ut[12];
+    uint32_t s = millis() / 1000;
+    snprintf(ut, sizeof(ut), "%02lu:%02lu:%02lu",
+             (unsigned long)(s / 3600),
+             (unsigned long)((s % 3600) / 60),
+             (unsigned long)(s % 60));
+    _setText("t16", ut);
+  }
+}
+
+// =========================
 // PROCESSA TOUCH EVENT 0x65
 // Pagina NEXTION_PAGE_CONTROLS: botoes erros/controle
 // Pagina NEXTION_PAGE_TESTES_MANUAIS: valvulas, purga
@@ -491,13 +625,20 @@ void taskNextion(void *param) {
   // Navega para a tela principal — sem aguardar hardware (a tela ja inicia)
   _nextionCmd("page dock_status");
   vTaskDelay(pdMS_TO_TICKS(300));
-  _setText("tVersao", FIRMWARE_VERSION);
 
   // Limpa todos os slots de canetas e cartuchos
   _nextionLimparTodos();
 
+  // Dispara sendme para capturar ID da pagina dock_status.
+  // _dockStatusAtualizar() sera chamado pelo handler do evento 0x66
+  // quando o ID for aprendido, evitando enviar pic=7 em outras telas.
+  _nextionCmd("sendme");
+  vTaskDelay(pdMS_TO_TICKS(150));
+  _verificarHome();
+
   uint32_t ultimoRefresh  = 0;
   uint32_t ultimoSendme   = 0;
+  uint32_t ultimoBlink    = 0;
   TagEvent ev;
 
   for (;;) {
@@ -505,14 +646,16 @@ void taskNextion(void *param) {
     if (millis() - ultimoRefresh >= 2000) {
       ultimoRefresh = millis();
 
-      _enviarDockScreen();   // tela principal dock_status
-      _enviarDadosDock();    // pagina status_dock (info sistema)
-      _enviarErros();        // pagina erros
-      _atualizarLeitores();  // todos os leitores NFC (status_pen / status_cart)
-
-      // Sensores e atuadores da tela testes_manuais (so envia quando ativa)
-      if (_pageAtual == NEXTION_PAGE_TESTES_MANUAIS) {
+      bool naDock = (_dockPageId != 0xFF && _pageAtual == _dockPageId);
+      if (naDock) {
+        _enviarDockScreen();
+        _dockStatusAtualizar();
+      } else if (_pageAtual == NEXTION_PAGE_TESTES_MANUAIS) {
         _enviarTestesManuais();
+      } else {
+        _enviarDadosDock();
+        _enviarErros();
+        _atualizarLeitores();
       }
     }
 
@@ -520,6 +663,15 @@ void taskNextion(void *param) {
     if (millis() - ultimoSendme >= 5000) {
       ultimoSendme = millis();
       _nextionCmd("sendme");
+    }
+
+    // ── Blink de t14 a cada 600ms quando todos os cartuchos OK ───────────
+    if (_t14Blink && (millis() - ultimoBlink >= 600)) {
+      ultimoBlink = millis();
+      if (_dockPageId == 0xFF || _pageAtual == _dockPageId) {
+        _t14Vis = !_t14Vis;
+        _nextionCmd(_t14Vis ? "vis t14,1" : "vis t14,0");
+      }
     }
 
     // ── Le bytes do Nextion ───────────────────────────────
@@ -566,6 +718,11 @@ void taskNextion(void *param) {
               } else if (pktBuf[0] == 0x66) {
                 // Page event: [0x66][page_id][FF FF FF]
                 uint8_t pid = pktBuf[1];
+                // Primeira resposta 0x66 apos boot = pagina dock_status
+                if (_dockPageId == 0xFF) {
+                  _dockPageId = pid;
+                  Serial.printf("[Nextion] dock_status pageId=%u\n", (unsigned)pid);
+                }
                 if (pid != _pageAtual) {
                   Serial.printf("[Nextion] Page=%u\n", (unsigned)pid);
                   // Ao entrar em testes_manuais, reseta estado das valvulas
@@ -575,6 +732,11 @@ void taskNextion(void *param) {
                     _val3Aberta = false;
                   }
                   _pageAtual = pid;
+                  // Postinitialize: ao voltar para dock_status atualiza imediatamente
+                  if (pid == _dockPageId) {
+                    _verificarHome();
+                    _dockStatusAtualizar();
+                  }
                 }
               }
             }
@@ -621,24 +783,30 @@ void taskNextion(void *param) {
 
     // ── Eventos de tag (queue taskNFC → taskNextion) ─────
     if (xQueueReceive(qNextionData, &ev, pdMS_TO_TICKS(500)) == pdTRUE) {
+      bool naDock = (_dockPageId != 0xFF && _pageAtual == _dockPageId);
       switch (ev.type) {
         case TagEvent::TAG_PRESENTE:
         case TagEvent::TAG_LIDA:
         case TagEvent::TAG_GRAVADA:
         case TagEvent::TAG_RESETADA:
-          _nextionMostrarReader(ev.readerIdx, ev.data);
+          if (!naDock) _nextionMostrarReader(ev.readerIdx, ev.data);
+          if (ev.readerIdx >= 3) _dockStatusAtualizar();
           break;
 
         case TagEvent::TAG_REMOVIDA:
-          _nextionLimparReader(ev.readerIdx);
+          if (!naDock) _nextionLimparReader(ev.readerIdx);
+          if (ev.readerIdx >= 3) _dockStatusAtualizar();
           break;
 
         case TagEvent::TAG_ERRO:
-          if (ev.readerIdx < 3) {
-            _setText(_penStComp[ev.readerIdx], "Erro");
-          } else if (ev.readerIdx < 6) {
-            _setText(_cartStComp[ev.readerIdx - 3], "Erro");
+          if (!naDock) {
+            if (ev.readerIdx < 3) {
+              _setText(_penStComp[ev.readerIdx], "Erro");
+            } else if (ev.readerIdx < 6) {
+              _setText(_cartStComp[ev.readerIdx - 3], "Erro");
+            }
           }
+          if (ev.readerIdx >= 3) _dockStatusAtualizar();
           break;
 
         default:

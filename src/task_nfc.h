@@ -18,7 +18,7 @@
 #define NFC_CS    13
 
 // Mapeamento dos 6 leitores (indices 0-5)
-static const uint8_t NFC_CS_PINS[6] = {13, 14, 4, 5, 15, 2};
+static const uint8_t NFC_CS_PINS[6] = {13, 14, 4, 5, 15, 32};
 static const char*   NFC_NOMES[6]   = {
   "Caneta 1",   "Caneta 2",   "Caneta 3",
   "Cartucho 1", "Cartucho 2", "Cartucho 3"
@@ -28,8 +28,8 @@ static const uint8_t NFC_ERR_IDX[6] = {
   ERR_E104, ERR_E105, ERR_E106
 };
 
-// Apenas os 3 leitores de caneta participam do round-robin de poll
-#define NFC_POLL_READERS 3
+// Canetas 0-2 + Cartuchos 3-5 (D5/D15/D32). D2 substituido por D32.
+#define NFC_POLL_READERS 6
 
 static Adafruit_PN532 nfcReader1(NFC_CS_PINS[0], &SPI);
 static Adafruit_PN532 nfcReader2(NFC_CS_PINS[1], &SPI);
@@ -46,16 +46,39 @@ static Adafruit_PN532 *nfc = nfcReaders[0];
 static const uint32_t POLL_INTERVAL_MS = 150;
 static const uint32_t TAG_TIMEOUT_MS   = 700;
 
-// Estado independente por leitor de caneta (round-robin)
-static bool     _tagPresente[NFC_POLL_READERS]  = {false, false, false};
+// Estado independente por leitor (round-robin, todos os 6)
+static bool     _tagPresente[NFC_POLL_READERS]  = {};
+static bool     _dataOk[NFC_POLL_READERS]       = {};  // leitura NTAG bem-sucedida
 static uint8_t  _lastUid[NFC_POLL_READERS][7]   = {};
-static uint8_t  _lastUidLen[NFC_POLL_READERS]   = {0, 0, 0};
-static uint32_t _ultDetectMs[NFC_POLL_READERS]  = {0, 0, 0};
+static uint8_t  _lastUidLen[NFC_POLL_READERS]   = {};
+static uint32_t _ultDetectMs[NFC_POLL_READERS]  = {};
 static uint8_t  _pollReader = 0;
 
 // =============================================================
 // HELPERS
 // =============================================================
+
+// Atualiza o LED com base no estado atual das tags e saude do hardware.
+// Banco 1 = canetas  (readers 0-2, D13/D14/D4)   mask 0x07
+// Banco 2 = cartuchos (readers 3-4, D5/D15)       mask 0x18  (D2 excluido)
+// Regra:
+//   - Qualquer tag presente                                    → LED on (1)
+//   - Sem tag, banco 2 completo (bits 3+4) OU banco 1 OK (>=1) → LED off (0)
+//   - Sem tag, nenhum reader de nenhum banco detectado          → LED pisca (2)
+static void _ledAtualizar() {
+  if (!hTaskLED) return;
+  bool anyTag = false;
+  for (uint8_t i = 0; i < NFC_POLL_READERS; i++) {
+    if (_tagPresente[i]) { anyTag = true; break; }
+  }
+  if (anyTag) {
+    xTaskNotify(hTaskLED, 1, eSetValueWithOverwrite);
+  } else if (nfcReaderOkMask == 0) {
+    xTaskNotify(hTaskLED, 2, eSetValueWithOverwrite);
+  } else {
+    xTaskNotify(hTaskLED, 0, eSetValueWithOverwrite);
+  }
+}
 
 static void _limparEstadoTag() {
   if (xSemaphoreTake(mutexTag, pdMS_TO_TICKS(20)) == pdTRUE) {
@@ -72,6 +95,8 @@ static void _limparEstadoTag() {
 static void _switchReader(uint8_t readerIdx) {
   if (nfcCanalAtivo == readerIdx) return;
   for (uint8_t i = 0; i < 6; i++) {
+    // D2 (LED2) nao e deselected aqui — a biblioteca PN532 gerencia o CS dele.
+    // Evita toggle acidental do LED onboard durante o round-robin.
     if (NFC_CS_PINS[i] == LED2) continue;
     digitalWrite(NFC_CS_PINS[i], HIGH);
   }
@@ -91,7 +116,9 @@ static bool _selecionarLeitor(uint8_t readerIdx) {
     }
     nfc = nfcReaders[readerIdx];
     nfc->begin();
+    vTaskDelay(pdMS_TO_TICKS(30));
     nfc->SAMConfig();
+    vTaskDelay(pdMS_TO_TICKS(20));
     nfcCanalAtivo = readerIdx;
     _limparEstadoTag();
     Serial.printf("[NFC] Leitor ativo: %s (CS=D%d)\n",
@@ -185,6 +212,7 @@ static void _publicarEvento(TagEvent::Type type, const TagData *data = nullptr,
   if (uid)  { memcpy(ev.uid, uid, uidLen); ev.uidLen = uidLen; }
 
   if (xSemaphoreTake(mutexTag, pdMS_TO_TICKS(20)) == pdTRUE) {
+    // Estado global (leitor primario)
     switch (type) {
       case TagEvent::TAG_PRESENTE:
         gTag.presente    = true;
@@ -203,6 +231,30 @@ static void _publicarEvento(TagEvent::Type type, const TagData *data = nullptr,
         if (data) { gTag.cache = *data; gTag.cacheValido = true; }
         break;
       default: break;
+    }
+    // Estado por leitor (gTagReaders[0-5])
+    if (readerIdx < 6) {
+      switch (type) {
+        case TagEvent::TAG_PRESENTE:
+          gTagReaders[readerIdx].presente = true;
+          gTagReaders[readerIdx].valid    = (data != nullptr);
+          if (data) gTagReaders[readerIdx].data = *data;
+          break;
+        case TagEvent::TAG_REMOVIDA:
+          gTagReaders[readerIdx].presente = false;
+          gTagReaders[readerIdx].valid    = false;
+          memset(&gTagReaders[readerIdx].data, 0, sizeof(TagData));
+          break;
+        case TagEvent::TAG_LIDA:
+        case TagEvent::TAG_GRAVADA:
+        case TagEvent::TAG_RESETADA:
+          if (data) { gTagReaders[readerIdx].data = *data; gTagReaders[readerIdx].valid = true; }
+          break;
+        case TagEvent::TAG_ERRO:
+          gTagReaders[readerIdx].valid = false;
+          break;
+        default: break;
+      }
     }
     xSemaphoreGive(mutexTag);
   }
@@ -245,12 +297,12 @@ static void _publicarEvento(TagEvent::Type type, const TagData *data = nullptr,
 // =============================================================
 // BOOT: verifica os 6 leitores no SPI
 // Retorna bitmask dos leitores OK (bit 0 = leitor 0 / D13, etc.)
-// D2 (LED2) e ignorado — nao pode ser usado como CS
+// D2 substituido por D32 — sem conflito com LED onboard.
 // =============================================================
 static uint8_t _verificarLeitores() {
   uint8_t okMask = 0;
 
-  // Todos CS em HIGH antes de comecar, exceto LED2
+  // Todos CS em HIGH antes de comecar (D2 não está mais no array)
   for (uint8_t i = 0; i < 6; i++) {
     if (NFC_CS_PINS[i] == LED2) continue;
     pinMode(NFC_CS_PINS[i], OUTPUT);
@@ -258,17 +310,14 @@ static uint8_t _verificarLeitores() {
   }
 
   for (uint8_t i = 0; i < 6; i++) {
-    // D2 e LED — nao testa SPI, mas seta erro pois o leitor esta indisponivel
-    if (NFC_CS_PINS[i] == LED2) {
-      erroSetar(NFC_ERR_IDX[i]);
-      Serial.printf("[NFC] %s (CS=D%d): OFFLINE (pino LED reservado)\n",
-                    NFC_NOMES[i], NFC_CS_PINS[i]);
-      continue;
-    }
-
     Adafruit_PN532 nfcTmp(NFC_CS_PINS[i], &SPI);
     nfcTmp.begin();
-    vTaskDelay(pdMS_TO_TICKS(20));
+    // Re-assert todos os CS HIGH
+    for (uint8_t j = 0; j < 6; j++) {
+      if (NFC_CS_PINS[j] == LED2) continue;
+      digitalWrite(NFC_CS_PINS[j], HIGH);
+    }
+    vTaskDelay(pdMS_TO_TICKS(30));
     uint32_t fw = nfcTmp.getFirmwareVersion();
 
     if (fw) {
@@ -295,7 +344,16 @@ static uint8_t _verificarLeitores() {
 // Core 0, prioridade 3
 // =============================================================
 void taskNFC(void *param) {
-  SPI.begin(NFC_SCK, NFC_MISO, NFC_MOSI);
+  // SS=-1 impede o hardware SPI de tomar conta do GPIO5 (D5 = CS do Cartucho 1).
+  // Sem isso, o VSPI aloca GPIO5 como hardware SS e conflita com o CS por software.
+  SPI.begin(NFC_SCK, NFC_MISO, NFC_MOSI, -1);
+  // Reclaim pinos CS como GPIO output — D2 ignorado (taskLED controla GPIO2)
+  for (uint8_t i = 0; i < 6; i++) {
+    if (NFC_CS_PINS[i] == LED2) continue;
+    pinMode(NFC_CS_PINS[i], OUTPUT);
+    digitalWrite(NFC_CS_PINS[i], HIGH);
+  }
+  vTaskDelay(pdMS_TO_TICKS(50));
 
   // Wire.begin() ja feito em setup() — taskNFC NAO acessa I2C durante operacao.
   // Unico toque em Wire e este ping de boot, protegido pelo mutex.
@@ -311,12 +369,14 @@ void taskNFC(void *param) {
   uint8_t okMask = _verificarLeitores();
   nfcReaderOkMask = okMask;
 
+  // LED inicial: pisca se nenhum banco completo; apagado se pelo menos um OK
+  _ledAtualizar();
+
   if (!(okMask & 0x01)) {
-    Serial.println("[NFC] ERRO CRITICO: Leitor principal (D13) ausente.");
-    while (true) { digitalWrite(LED2, !digitalRead(LED2)); vTaskDelay(pdMS_TO_TICKS(200)); }
+    Serial.println("[NFC] AVISO: Leitor principal (D13) ausente. Continuando com leitores disponiveis.");
   }
 
-  // Inicializa todos os leitores de caneta disponiveis (indices 0-2)
+  // Inicializa todos os leitores disponiveis (canetas 0-2 e cartuchos 3-4)
   for (uint8_t r = 0; r < NFC_POLL_READERS; r++) {
     if (!(okMask & (1 << r))) continue;
     for (uint8_t i = 0; i < 6; i++) {
@@ -497,6 +557,7 @@ void taskNFC(void *param) {
                          memcmp(uid, _lastUid[r], uidLen) == 0);
 
       if (!_tagPresente[r] || !mesmaTag) {
+        // Nova tag (ou tag diferente): primeira leitura
         memcpy(_lastUid[r], uid, uidLen);
         _lastUidLen[r]  = uidLen;
         _tagPresente[r] = true;
@@ -507,6 +568,7 @@ void taskNFC(void *param) {
           if (t > 0) vTaskDelay(pdMS_TO_TICKS(50));
           ok = _lerTag(d);
         }
+        _dataOk[r] = ok;
         xSemaphoreGive(mutexSPI);
 
         digitalWrite(LED2, HIGH);
@@ -516,6 +578,18 @@ void taskNFC(void *param) {
         Serial.printf("[NFC] Tag leitor %u. UID:", r + 1);
         for (uint8_t i = 0; i < uidLen; i++) Serial.printf(" %02X", uid[i]);
         Serial.println();
+      } else if (!_dataOk[r]) {
+        // Mesma tag presente mas leitura NTAG falhou antes — retry
+        TagData d;
+        bool ok = _lerTag(d);
+        if (ok) {
+          _dataOk[r] = true;
+          xSemaphoreGive(mutexSPI);
+          _publicarEvento(TagEvent::TAG_LIDA, &d, _lastUid[r], _lastUidLen[r], r);
+          Serial.printf("[NFC] Retry leitura leitor %u OK.\n", r + 1);
+        } else {
+          xSemaphoreGive(mutexSPI);
+        }
       } else {
         xSemaphoreGive(mutexSPI);
       }
@@ -523,17 +597,11 @@ void taskNFC(void *param) {
       xSemaphoreGive(mutexSPI);
       if (_tagPresente[r] && (now - _ultDetectMs[r] > TAG_TIMEOUT_MS)) {
         _tagPresente[r] = false;
+        _dataOk[r]      = false;
         memset(_lastUid[r], 0, sizeof(_lastUid[r]));
         _lastUidLen[r]  = 0;
 
-        // Apaga LED apenas se nenhum leitor tem tag
-        bool algumPresente = false;
-        for (uint8_t i = 0; i < NFC_POLL_READERS; i++) {
-          if (_tagPresente[i]) { algumPresente = true; break; }
-        }
-        if (!algumPresente) {
-          xTaskNotify(hTaskLED, 0, eSetValueWithOverwrite);
-        }
+        _ledAtualizar();
 
         _publicarEvento(TagEvent::TAG_REMOVIDA, nullptr, nullptr, 0, r);
         Serial.printf("[NFC] Tag removida do leitor %u.\n", r + 1);
