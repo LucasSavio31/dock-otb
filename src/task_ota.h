@@ -142,48 +142,49 @@ static bool _otaEnsureWifi() {
   return _otaConnectWifi();
 }
 
-// ─── GitHub ───────────────────────────────────────────────────
+// ─── Versão via raw.githubusercontent.com ─────────────────────
+// api.github.com pode estar bloqueado em certas redes.
+// O OTA lê version.json direto do repositório (mesmo CDN do github.com).
+// Formato do arquivo:
+//   { "tag_name": "v1.6",
+//     "download_url": "https://raw.githubusercontent.com/owner/repo/main/firmware/firmware.bin" }
 
 static bool _otaCheckGithub(char *latestVer, size_t verLen,
                              char *downloadUrl, size_t urlLen) {
   char path[128];
   snprintf(path, sizeof(path),
-    "/repos/%s/%s/releases/latest", OTA_GITHUB_OWNER, OTA_GITHUB_REPO);
+    "/%s/%s/main/firmware/version.json", OTA_GITHUB_OWNER, OTA_GITHUB_REPO);
 
-  // Alocar no heap — WiFiClientSecure (~40KB) + stack da task não cabem na stack
   WiFiClientSecure *client = new WiFiClientSecure();
   client->setInsecure();
 
   HTTPClient http;
-  // begin(client, host, port, uri, https) garante SNI correto
-  http.begin(*client, "api.github.com", 443, path, true);
+  http.begin(*client, "raw.githubusercontent.com", 443, path, true);
   http.addHeader("User-Agent", "OTB-DockStation/1.0");
-  http.addHeader("Accept", "application/vnd.github+json");
   http.setTimeout(15000);
   http.setConnectTimeout(12000);
 
   _otaSetState(OTA_STATE_CHECKING);
-  Serial.println("OTA_INFO:Consultando GitHub API...");
+  Serial.println("OTA_INFO:Consultando versao no repositorio...");
 
   int code = http.GET();
 
   if (code == 404) {
-    Serial.println("OTA_ERR:Sem releases no repositorio. Publique uma release com firmware.bin.");
+    Serial.println("OTA_ERR:firmware/version.json nao encontrado no repositorio.");
     http.end(); delete client;
     return false;
   }
   if (code <= 0) {
-    Serial.printf("OTA_ERR:Falha SSL/TCP ao conectar GitHub (cod=%d). Verifique DNS e heap livre.\n", code);
+    Serial.printf("OTA_ERR:Falha SSL/TCP (cod=%d). Verifique DNS e heap livre.\n", code);
     http.end(); delete client;
     return false;
   }
   if (code != 200) {
-    Serial.printf("OTA_ERR:GitHub API HTTP %d\n", code);
+    Serial.printf("OTA_ERR:HTTP %d ao buscar version.json\n", code);
     http.end(); delete client;
     return false;
   }
 
-  // Stream-parse JSON — evita alocar o body inteiro (~10KB) em heap
   JsonDocument doc;
   DeserializationError jerr = deserializeJson(doc, http.getStream());
   http.end();
@@ -198,18 +199,12 @@ static bool _otaCheckGithub(char *latestVer, size_t verLen,
   strncpy(latestVer, tag, verLen - 1);
   latestVer[verLen - 1] = '\0';
 
-  downloadUrl[0] = '\0';
-  for (JsonObject asset : doc["assets"].as<JsonArray>()) {
-    if (strcmp(asset["name"] | "", OTA_ASSET_NAME) == 0) {
-      strncpy(downloadUrl, asset["browser_download_url"] | "", urlLen - 1);
-      downloadUrl[urlLen - 1] = '\0';
-      break;
-    }
-  }
+  const char *url = doc["download_url"] | "";
+  strncpy(downloadUrl, url, urlLen - 1);
+  downloadUrl[urlLen - 1] = '\0';
 
-  if (strlen(downloadUrl) == 0) {
-    Serial.printf("OTA_ERR:Asset '%s' nao encontrado na release %s\n",
-                  OTA_ASSET_NAME, latestVer);
+  if (strlen(latestVer) == 0 || strlen(downloadUrl) == 0) {
+    Serial.println("OTA_ERR:version.json incompleto (tag_name ou download_url ausente)");
     return false;
   }
 
