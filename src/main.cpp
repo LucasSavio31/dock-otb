@@ -134,8 +134,9 @@ void setup() {
   xTaskCreatePinnedToCore(taskNVS,       "NVS",       2048, nullptr, 1, nullptr,         1);
   xTaskCreatePinnedToCore(taskRecarga,   "Recarga",   3072, nullptr, 2, nullptr,         0);
   xTaskCreatePinnedToCore(taskLogDb,     "LogDb",     4096, nullptr, 1, nullptr,         1);
-  xTaskCreatePinnedToCore(taskOTA,       "OTA",      12288, nullptr, 1, nullptr,         1);
-  xTaskCreatePinnedToCore(taskViolacao,  "Violacao",  2048, nullptr, 2, nullptr,         1);
+  xTaskCreatePinnedToCore(taskOTA,           "OTA",         12288, nullptr, 1, nullptr, 1);
+  xTaskCreatePinnedToCore(taskOtaAutoCheck, "OtaAutoCheck", 10240, nullptr, 1, nullptr, 1);
+  xTaskCreatePinnedToCore(taskViolacao,     "Violacao",      2048, nullptr, 2, nullptr, 1);
 
   Serial.println("[Main] OTB DockStation V5 — tasks criadas.");
 }
