@@ -16,6 +16,7 @@
 #include "task_recarga.h"
 #include "task_logdb.h"
 #include "task_ota.h"
+#include "task_violacao.h"
 
 // =========================
 // HANDLES GLOBAIS
@@ -38,6 +39,7 @@ TaskHandle_t      hTaskLED     = nullptr;
 TaskHandle_t      hTaskI2CScan = nullptr;
 SemaphoreHandle_t semI2CScanDone = nullptr;
 volatile bool     nfcReinitPending = false;
+volatile bool     gBloqueado       = false;
 volatile uint8_t  nfcReaderOkMask  = 0;
 volatile bool     gI2CBusy         = false;
 
@@ -133,6 +135,7 @@ void setup() {
   xTaskCreatePinnedToCore(taskRecarga,   "Recarga",   3072, nullptr, 2, nullptr,         0);
   xTaskCreatePinnedToCore(taskLogDb,     "LogDb",     4096, nullptr, 1, nullptr,         1);
   xTaskCreatePinnedToCore(taskOTA,       "OTA",      12288, nullptr, 1, nullptr,         1);
+  xTaskCreatePinnedToCore(taskViolacao,  "Violacao",  2048, nullptr, 2, nullptr,         1);
 
   Serial.println("[Main] OTB DockStation V5 — tasks criadas.");
 }

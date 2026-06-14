@@ -78,6 +78,19 @@ void taskAtuadores(void *param) {
   Serial.println("[Atuadores] Pronto.");
 
   for (;;) {
+    // ── Bloqueio por violação: atuadores desligados, filas drenadas ──
+    if (gBloqueado) {
+      _bombaSetDuty(0);
+      gpio_set_level((gpio_num_t)VALVULA_1, 0);
+      gpio_set_level((gpio_num_t)VALVULA_2, 0);
+      gpio_set_level((gpio_num_t)VALVULA_3, 0);
+      gBombaDuty  = 0;
+      ControleCmd cc; while (xQueueReceive(qControleCmd, &cc, 0) == pdTRUE) {}
+      ActCmd      ac; while (xQueueReceive(qActCmd,      &ac, 0) == pdTRUE) {}
+      vTaskDelay(pdMS_TO_TICKS(500));
+      continue;
+    }
+
     uint32_t now = millis();
 
     // ── Fim de purga ────────────────────────────────────────

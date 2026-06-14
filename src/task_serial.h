@@ -911,7 +911,8 @@ static bool _opPrincipalConhecida(const String &op) {
          op == "pump"    || op == "diag"   || op == "dock"  ||
          op == "sensor"  || op == "erros"  || op == "i2cscan" ||
          op.startsWith("nvs ") || op.startsWith("recharge ") ||
-         op.startsWith("calib ") || op.startsWith("logdb ");
+         op.startsWith("calib ") || op.startsWith("logdb ") ||
+         op.startsWith("unlock ") || op == "lock";
 }
 
 static bool _linhaEcoOuLixo(const String &raw, const String &op) {
@@ -1054,6 +1055,27 @@ void taskSerial(void *param) {
           xQueueSend(qRechargeCmd, &cmd, pdMS_TO_TICKS(100));
           Serial.printf("Iniciando recarga caneta %d...\n", ch + 1);
         } else { Serial.println("Uso: recharge 1|2|3|stop|read 1|2|3"); }
+      }
+    }
+    else if (op == "lock") {
+      Serial.println(gBloqueado ? "DOCK_BLOCKED" : "DOCK_OK");
+    }
+    else if (op.startsWith("unlock ")) {
+      String senha = op.substring(7); senha.trim();
+      if (senha == "1234") {
+        if (mutexNVS && xSemaphoreTake(mutexNVS, pdMS_TO_TICKS(500)) == pdTRUE) {
+          Preferences p;
+          p.begin("otb-dock", false);
+          p.putUChar("locked", 0);
+          p.end();
+          xSemaphoreGive(mutexNVS);
+        }
+        gBloqueado = false;
+        Serial.println("UNLOCK_OK");
+        vTaskDelay(pdMS_TO_TICKS(300));
+        esp_restart();
+      } else {
+        Serial.println("UNLOCK_ERR:wrong_password");
       }
     }
     else if (op.length() > 0) { Serial.println("Comando invalido."); }

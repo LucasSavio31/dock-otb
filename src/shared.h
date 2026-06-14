@@ -3,7 +3,7 @@
 //  shared.h - V5
 //  Tipos, handles globais e estado compartilhado
 // =============================================================
-#define FIRMWARE_VERSION "V1.8"
+#define FIRMWARE_VERSION "V1.8.1"
 #include <Arduino.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
@@ -24,6 +24,9 @@
 #define VALVULA_1    26
 #define VALVULA_2    27
 #define VALVULA_3    33
+
+// Pino de detecção de violação (input-only, pull-up externo 10kΩ → 3.3V)
+#define VIOLACAO_PIN 34
 
 // Tempo do pulso de purga (ms)
 #define PURGE_DURATION_MS  5000
@@ -278,6 +281,10 @@ extern char gSerialDock[32];
 
 // Duty atual da bomba 0-100 (escrito pela taskAtuadores, lido pela taskNextion)
 extern volatile uint8_t gBombaDuty;
+
+// Flag de bloqueio por violação física — persiste via NVS entre reinicializações
+// Setado por taskViolacao; limpo por comando "unlock 1234" + esp_restart()
+extern volatile bool gBloqueado;
 
 // Nível virtual dos cartuchos 0-100% por cor (não persistente; -5% por recarga)
 // Índice = TagCor (1=vermelho, 2=azul, 3=amarelo), índice 0 não usado

@@ -764,6 +764,10 @@ body.theme-light .history-row.head{background:#fff}
     <div class="nav-item" data-page="ativacao">
       <span class="nav-icon">🔐</span><span data-i18n="nav_ativacao">Ativação da Dock</span>
     </div>
+    <div class="nav-item" data-page="desbloqueio">
+      <span class="nav-icon">🔓</span><span>Desbloqueio</span>
+      <span class="nav-badge" id="unlockBadge" style="display:none;background:var(--red,#f44)">!</span>
+    </div>
     <div class="nav-item" data-page="ota">
       <span class="nav-icon">⬆️</span><span>Atualização OTA</span>
       <span class="nav-badge" id="otaBadge" style="display:none;background:var(--green)">NEW</span>
@@ -1256,6 +1260,56 @@ body.theme-light .history-row.head{background:#fff}
                  border:1px solid var(--border);white-space:pre-wrap;word-break:break-all"></div>
       </div>
     </div>
+
+    <!-- ══ PAGE: DESBLOQUEIO ══ -->
+    <div class="page" id="page-desbloqueio">
+      <div style="max-width:520px;margin:0 auto;display:flex;flex-direction:column;gap:14px">
+
+        <!-- Status em tempo real -->
+        <div class="card">
+          <div class="card-header" style="margin-bottom:14px">
+            <div class="card-title">Estado do Equipamento</div>
+            <span id="unlockConnBadge" class="badge" style="background:rgba(139,148,158,.15);color:var(--muted)">Desconectado</span>
+          </div>
+
+          <!-- Caixa de status principal -->
+          <div id="unlockStatusBox" style="display:flex;align-items:center;gap:14px;padding:16px;border-radius:10px;background:var(--surface2,rgba(255,255,255,.04));border:1px solid var(--border2);margin-bottom:14px;transition:border-color .3s">
+            <div id="unlockStatusIcon" style="font-size:28px;line-height:1;flex-shrink:0">🔌</div>
+            <div style="flex:1;min-width:0">
+              <div id="unlockStatusTitle" style="font-size:15px;font-weight:700;color:var(--text)">Desconectado</div>
+              <div id="unlockStatusSub" style="font-size:12px;color:var(--muted);margin-top:3px">Conecte ao equipamento para monitorar</div>
+            </div>
+            <div id="unlockStatusTime" style="font-size:10px;color:var(--dim);text-align:right;flex-shrink:0;display:none"></div>
+          </div>
+
+          <!-- Barra de progresso do reboot (oculta por padrão) -->
+          <div id="unlockRebootWrap" style="display:none;margin-bottom:14px">
+            <div style="height:5px;background:var(--border2);border-radius:3px;overflow:hidden">
+              <div id="unlockRebootFill" style="height:100%;width:0%;background:var(--accent);border-radius:3px;transition:none"></div>
+            </div>
+            <div id="unlockRebootLabel" style="font-size:11px;color:var(--muted);margin-top:6px;text-align:center">Aguardando reinício do dispositivo...</div>
+          </div>
+
+          <!-- Botão de desbloqueio -->
+          <button id="btnDockUnlock" class="btn btn-outline" style="width:100%;justify-content:center;font-size:13px;padding:10px" onclick="dockUnlock()" disabled>
+            🔓 Desbloquear Equipamento
+          </button>
+          <div id="dockUnlockMsg" style="margin-top:10px;font-size:12px;text-align:center;display:none"></div>
+        </div>
+
+        <!-- Mini log de eventos -->
+        <div class="card">
+          <div class="card-header" style="margin-bottom:10px">
+            <div class="card-title" style="font-size:12px;text-transform:uppercase;letter-spacing:.5px;color:var(--muted)">Eventos Recentes</div>
+            <button class="btn btn-outline btn-sm" onclick="document.getElementById('unlockEvtLog').innerHTML='<span style=\'color:var(--dim)\'>—</span>'">Limpar</button>
+          </div>
+          <div id="unlockEvtLog" style="font-family:monospace;font-size:11px;line-height:2;color:var(--muted);min-height:48px">
+            <span style="color:var(--dim)">—</span>
+          </div>
+        </div>
+
+      </div>
+    </div><!-- /page-desbloqueio -->
 
     <!-- ══ PAGE: ATIVAÇÃO ══ -->
     <div class="page" id="page-ativacao">
@@ -2546,7 +2600,7 @@ function historyBuildReportHtml(model) {
     </div>
   `).join('');
 
-  const rowsHtml = model.entries.map(entry => `
+  const rowsHtml = [...model.entries].reverse().map(entry => `
     <tr>
       <td>${historyEscapeHtml(entry.timestamp)}</td>
       <td>${historyEscapeHtml(entry.type)}</td>
@@ -2860,7 +2914,7 @@ async function startReading() {
         if (line.startsWith('NVS_ACTIVATION:'))            nvsHandleActivation(line.substring(15));
         else if (line.startsWith('NVS_USAGE:'))            nvsHandleUsage(line.substring(10));
         else if (line.startsWith('NVS_RECHARGE_COUNT:'))   nvsHandleRechargeCount(line.substring(19));
-        else if (line.startsWith('FW_VERSION:'))           { const el = document.getElementById('activ-fw'); if (el) el.textContent = line.substring(11); }
+        else if (line.startsWith('FW_VERSION:'))           { const el = document.getElementById('activ-fw'); if (el) el.textContent = line.substring(11); _dockHandleBootDetected(); }
         else if (line.startsWith('RECHARGE_STATUS:'))      rechargeHandleStatus(line.substring(16));
         else if (line.startsWith('RECHARGE_LEVEL:'))       rechargeHandleLevel(line.substring(15));
         else if (line.startsWith('CALIB_READ:'))           calibHandleRead(line.substring(11));
@@ -2873,6 +2927,10 @@ async function startReading() {
         else if (line.startsWith('CALIB_CAPDAC_ERR:'))     capdacHandleErr(line.substring(17));
         else if (line.startsWith('CALIB_CAPDAC:'))         capdacHandleGet(line.substring(13));
         else if (line.startsWith('OTA_'))                  otaHandleLine(line);
+        else if (line === 'DOCK_BLOCKED')                  dockHandleBlocked();
+        else if (line === 'DOCK_OK')                       dockHandleNormal();
+        else if (line === 'UNLOCK_OK')                     dockHandleUnlockOk();
+        else if (line.startsWith('UNLOCK_ERR:'))           dockHandleUnlockErr(line.substring(11));
       }
     }
   } catch(_) {}
@@ -3072,16 +3130,25 @@ function setConnected(ok) {
     _rechargeUpdateButtons();
     _rechargeEnsureLiveRead();
     _calibEnsureLiveRead();
+    if (_unlockState !== 'rebooting' && _unlockState !== 'reconnecting') {
+      _dockSetStatus('normal');
+      _dockAddEvent('🔗 Conexão serial estabelecida', 'var(--green)');
+    }
     // ESP32 imprime NVS_ACTIVATION e NVS_USAGE no boot automaticamente.
     // Fallback: se não receber em 6s, pede explicitamente.
     serial._nvsSyncTimer = setTimeout(async () => {
       if (serial.connected) await nvsSync();
     }, 6000);
+    // Verifica estado de bloqueio a cada conexão
+    setTimeout(() => {
+      if (serial.connected) Q.run(async () => { await _write('lock\n'); });
+    }, 2500);
   } else {
     usageStop();
     _rechargeStopLiveRead();
     _calibStopLive();
     _rechargeUpdateButtons();
+    if (_unlockState !== 'rebooting' && _unlockState !== 'reconnecting') _dockSetStatus('disconnected');
   }
   if (ok && serial.port?.getInfo) {
     const info = serial.port.getInfo();
@@ -4261,6 +4328,156 @@ function activClear() {
     activRender();
     historyAddEntry({ type: 'Ativação', origin: 'Dashboard', description: 'Dados de ativação removidos da dock.', severity: 'warn', status: 'Reset' });
   });
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  BLOQUEIO POR VIOLAÇÃO — máquina de estado em tempo real
+//  Estados: 'disconnected' | 'normal' | 'blocked' | 'rebooting' | 'reconnecting'
+// ═══════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════
+//  BLOQUEIO POR VIOLAÇÃO — máquina de estado + reconexão via
+//  Web Serial API events (disconnect / connect)
+// ═══════════════════════════════════════════════════════════════
+let _unlockState          = 'disconnected';
+let _dockReconnectPending = false;
+let _dockReconnectTimer   = null;
+
+const _unlockCfg = {
+  disconnected:  { icon:'🔌', title:'Desconectado',   sub:'Conecte ao equipamento para monitorar',      border:'var(--border2)',        btn:false },
+  normal:        { icon:'🟢', title:'Normal',          sub:'Equipamento operando normalmente',           border:'rgba(63,185,80,.35)',    btn:true  },
+  blocked:       { icon:'🔴', title:'BLOQUEADO',       sub:'Violação física detectada — ação necessária', border:'rgba(248,81,73,.45)', btn:true  },
+  rebooting:     { icon:'⏳', title:'Reiniciando...',  sub:'Aguardando o dispositivo reiniciar',         border:'rgba(210,153,34,.4)',   btn:false },
+  reconnecting:  { icon:'🔄', title:'Reconectando...', sub:'Restabelecendo comunicação serial',          border:'rgba(88,166,255,.35)', btn:false },
+};
+
+function _dockSetStatus(state, subOverride) {
+  _unlockState = state;
+  const cfg     = _unlockCfg[state] || _unlockCfg.disconnected;
+  const box     = document.getElementById('unlockStatusBox');
+  const icon    = document.getElementById('unlockStatusIcon');
+  const title   = document.getElementById('unlockStatusTitle');
+  const sub     = document.getElementById('unlockStatusSub');
+  const btn     = document.getElementById('btnDockUnlock');
+  const connBdg = document.getElementById('unlockConnBadge');
+  const navBdg  = document.getElementById('unlockBadge');
+  const wrap    = document.getElementById('unlockRebootWrap');
+
+  if (box)   box.style.borderColor = cfg.border;
+  if (icon)  icon.textContent      = cfg.icon;
+  if (title) title.textContent     = cfg.title;
+  if (sub)   sub.textContent       = subOverride || cfg.sub;
+  if (btn)   { btn.disabled = !cfg.btn; btn.className = 'btn ' + (state === 'blocked' ? 'btn-red' : 'btn-outline'); }
+  if (wrap)  wrap.style.display    = (state === 'rebooting' || state === 'reconnecting') ? '' : 'none';
+
+  if (connBdg) {
+    const map = {
+      disconnected:  ['Desconectado', 'rgba(139,148,158,.15)', 'var(--muted)'],
+      normal:        ['Conectado',    'rgba(63,185,80,.15)',   'var(--green)'],
+      blocked:       ['BLOQUEADO',    'rgba(248,81,73,.2)',    'var(--red,#f44)'],
+      rebooting:     ['Reiniciando',  'rgba(210,153,34,.2)',   'var(--yellow,#d89a1a)'],
+      reconnecting:  ['Reconectando', 'rgba(88,166,255,.15)',  'var(--blue,#58a6ff)'],
+    };
+    const [lbl, bg, color] = map[state] || map.disconnected;
+    connBdg.textContent = lbl; connBdg.style.background = bg; connBdg.style.color = color;
+  }
+  if (navBdg) navBdg.style.display = (state === 'blocked') ? '' : 'none';
+}
+
+function _dockAddEvent(msg, color) {
+  const log = document.getElementById('unlockEvtLog');
+  if (!log) return;
+  const now = new Date().toLocaleTimeString('pt-BR');
+  const line = `<div style="color:${color || 'var(--muted)'}">${now}&nbsp;&nbsp;${msg}</div>`;
+  if (log.querySelector('span')) log.innerHTML = '';
+  log.innerHTML = line + log.innerHTML;
+  const divs = log.querySelectorAll('div');
+  if (divs.length > 20) divs[divs.length - 1].remove();
+}
+
+
+// ─── Handlers de mensagens seriais ──────────────────────────────
+function dockHandleBlocked() {
+  _dockSetStatus('blocked');
+  _dockAddEvent('⚠️ VIOLAÇÃO DETECTADA — equipamento bloqueado', 'var(--red,#f44)');
+  appendLog('sys', '⚠️ Equipamento BLOQUEADO por violação física.');
+  historyAddEntry({ type: 'Segurança', origin: 'Firmware', description: 'Violação física detectada no sensor D34 — equipamento bloqueado automaticamente.', severity: 'error', status: 'Bloqueado' });
+}
+
+function dockHandleNormal() {
+  if (_unlockState === 'rebooting' || _unlockState === 'reconnecting') return;
+  _dockSetStatus('normal');
+}
+
+function dockHandleUnlockOk() {
+  _dockSetStatus('rebooting');
+  _dockAddEvent('✅ Desbloqueio aceito — reiniciando dispositivo...', 'var(--green)');
+  appendLog('sys', '✅ Desbloqueado — aguardando reinício...');
+  const msg = document.getElementById('dockUnlockMsg');
+  if (msg) msg.style.display = 'none';
+  historyAddEntry({ type: 'Segurança', origin: 'Dashboard', description: 'Desbloqueio autorizado via senha — equipamento reiniciando.', severity: 'warn', status: 'Desbloqueando' });
+  _dockStartRebootBar();
+}
+
+function dockHandleUnlockErr(reason) {
+  const msg = document.getElementById('dockUnlockMsg');
+  if (msg) {
+    msg.textContent = '❌ Senha incorreta. Tente novamente.';
+    msg.style.color = 'var(--red,#f44)';
+    msg.style.display = '';
+    setTimeout(() => { msg.style.display = 'none'; }, 3000);
+  }
+  _dockAddEvent('❌ Senha incorreta', 'var(--red,#f44)');
+}
+
+function dockUnlock() {
+  if (!serial.connected) { appendLog('sys', 'Conecte ao equipamento primeiro.'); return; }
+  askPassword('Digite a senha de administrador para desbloquear o equipamento.', async ok => {
+    if (!ok) return;
+    const msg = document.getElementById('dockUnlockMsg');
+    if (msg) { msg.textContent = 'Enviando comando...'; msg.style.color = 'var(--muted)'; msg.style.display = ''; }
+    Q.run(async () => { await _write('unlock 1234\n'); });
+  });
+}
+
+// Chip USB-serial externo (CP2102/CH340) nunca desconecta durante esp_restart().
+// O evento 'disconnect' do Web Serial API NÃO dispara neste hardware.
+// Detectamos o reboot pelo FW_VERSION: que o firmware imprime ~3s após o boot.
+async function _dockStartRebootBar() {
+  const fill = document.getElementById('unlockRebootFill');
+  const lbl  = document.getElementById('unlockRebootLabel');
+  if (fill) {
+    fill.style.transition = 'none'; fill.style.width = '0%';
+    await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+    fill.style.transition = 'width 8s linear'; fill.style.width = '80%';
+  }
+  if (lbl) lbl.textContent = 'Aguardando reinício do dispositivo...';
+
+  // Fallback: se FW_VERSION não chegar em 20s, verifica se ainda está conectado
+  _dockReconnectTimer = setTimeout(() => {
+    if (_unlockState !== 'rebooting' && _unlockState !== 'reconnecting') return;
+    if (serial.connected) {
+      _dockAddEvent('⚠️ Boot demorou — verificando estado...', 'var(--yellow,#d89a1a)');
+      _dockSetStatus('normal');
+    } else {
+      _dockSetStatus('disconnected', 'Reconecte manualmente.');
+      _dockAddEvent('⚠️ Timeout — reconecte manualmente', 'var(--yellow,#d89a1a)');
+      renderPortList();
+    }
+  }, 20000);
+}
+
+// Chamado quando FW_VERSION: é recebido — indica que o ESP32 completou o boot.
+async function _dockHandleBootDetected() {
+  if (_unlockState !== 'rebooting' && _unlockState !== 'reconnecting') return;
+  clearTimeout(_dockReconnectTimer);
+  _dockReconnectPending = false;
+  const fill = document.getElementById('unlockRebootFill');
+  if (fill) { fill.style.transition = 'width 0.4s ease'; fill.style.width = '100%'; }
+  await new Promise(r => setTimeout(r, 400));
+  _dockSetStatus('normal');
+  _dockAddEvent('🔗 Dispositivo reiniciado — equipamento desbloqueado!', 'var(--green)');
+  appendLog('sys', '🔗 Equipamento reiniciado e desbloqueado com sucesso.');
+  historyAddEntry({ type: 'Segurança', origin: 'Firmware', description: 'Equipamento desbloqueado e reiniciado — operação normal restabelecida.', severity: 'success', status: 'Desbloqueado' });
 }
 
 function activUnlock() {

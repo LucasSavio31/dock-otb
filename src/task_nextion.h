@@ -642,6 +642,13 @@ void taskNextion(void *param) {
   TagEvent ev;
 
   for (;;) {
+    // ── Bloqueio por violação: mantém página 15 e inibe tudo ──
+    if (gBloqueado) {
+      _nextionCmd("page 15");
+      vTaskDelay(pdMS_TO_TICKS(2000));
+      continue;
+    }
+
     // ── Refresh periodico a cada 2s ───────────────────────
     if (millis() - ultimoRefresh >= 2000) {
       ultimoRefresh = millis();
