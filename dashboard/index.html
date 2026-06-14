@@ -939,6 +939,8 @@ body.theme-light .history-row.head{background:#fff}
           <div class="stat"><div class="stat-label" data-i18n="dock_hall_sensor">Hall Sensor</div><div class="stat-value mono" id="dk-hall">—</div></div>
           <div class="stat"><div class="stat-label" data-i18n="tasks_freertos">Tasks FreeRTOS</div><div class="stat-value mono" id="dk-tasks">—</div></div>
           <div class="stat"><div class="stat-label" data-i18n="uptime">Uptime</div><div class="stat-value mono" id="dk-uptime">—</div></div>
+          <div class="stat"><div class="stat-label">Versão do Firmware</div><div class="stat-value mono" id="dk-fw-ver">—</div></div>
+          <div class="stat"><div class="stat-label">Atualização de Firmware</div><div class="stat-value" id="dk-fw-upd">—</div></div>
         </div>
         <div class="diag-out mt8" id="dk-raw" style="display:none"></div>
       </div>
@@ -2233,6 +2235,8 @@ function historyHandleFirmwareVersion(version) {
   historySave();
   const fwEl = document.getElementById('activ-fw');
   if (fwEl) fwEl.textContent = historyState.dock.firmwareVersion;
+  const dkFw = document.getElementById('dk-fw-ver');
+  if (dkFw) dkFw.textContent = version || '—';
 }
 
 function historyObserveErrors(errs) {
@@ -3178,8 +3182,11 @@ document.querySelectorAll('.nav-item[data-page]').forEach(el => {
     if (el.dataset.page === 'debuglog')  dbgRender();
     if (el.dataset.page === 'ota' && serial.connected) {
       otaRefreshStatus();
-      // Retry após 3s: cobre o caso em que o ESP32 ainda está reconectando WiFi
-      setTimeout(() => { if (serial.connected) otaRefreshStatus(); }, 3000);
+      // Verifica automaticamente a última release ao abrir a página
+      setTimeout(() => { if (serial.connected) otaCheck(); }, 1500);
+    }
+    if (el.dataset.page === 'dock' && serial.connected) {
+      otaRefreshStatus();
     }
     if (el.dataset.page === 'ativacao') {
       const fwEl = document.getElementById('activ-fw');
@@ -3304,6 +3311,11 @@ async function refreshDock() {
   setVal('dk-hall',    findKey(m, 'hall'));
   setVal('dk-tasks',   findKey(m, 'tasks'));
   setVal('dk-uptime',  findKey(m, 'uptime'));
+  // Versão do firmware (já preenchida pelo FW_VERSION: no boot, mas garante consistência)
+  const dkFwVer = document.getElementById('dk-fw-ver');
+  if (dkFwVer && dkFwVer.textContent === '—') dkFwVer.textContent = historyState.dock.firmwareVersion || '—';
+  // Atualiza status OTA para preencher dk-fw-upd
+  otaRefreshStatus();
   // SVG Charts Update
   const heapLivreStr  = findKey(m, 'heap livre');
   const heapTotalStr  = findKey(m, 'heap total');
@@ -3838,6 +3850,14 @@ function otaHandleLine(line) {
     if (updBadge) updBadge.style.display = avail ? 'block' : 'none';
     const navBadge = document.getElementById('otaBadge');
     if (navBadge) navBadge.style.display = avail ? 'inline' : 'none';
+    const dkFwUpd = document.getElementById('dk-fw-upd');
+    if (dkFwUpd) {
+      if (avail) {
+        dkFwUpd.innerHTML = `<span style="color:#58a6ff;cursor:pointer;font-weight:600" onclick="document.querySelector('.nav-item[data-page=ota]')?.click()" title="Clique para ir para Atualização OTA">⬆ ${lat} disponível</span>`;
+      } else {
+        dkFwUpd.innerHTML = `<span style="color:var(--green)">✓ atualizado</span>`;
+      }
+    }
     // WiFi status — usa IP do campo ip= (evita limpar IP já mostrado)
     const savedSsid = parts['wifi'] || '';
     if (savedSsid && savedSsid !== 'nao_configurado') {

@@ -625,7 +625,6 @@ void taskOTA(void *param) {
         // WiFi desconectado antes do reboot para liberar recursos
 
         if (ok) {
-          WiFi.disconnect(true); // libera antes do reboot
           _otaSavePending(true);
           Serial.printf("OTA_UPDATE_OK:fw=%s→%s,reiniciando...\n",
                         FIRMWARE_VERSION, latestVer);

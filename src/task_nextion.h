@@ -620,10 +620,11 @@ static void _processarTouch(uint8_t page, uint8_t compID, uint8_t event) {
 // =========================
 void taskNextion(void *param) {
   Serial2.begin(9600, SERIAL_8N1, NEXTION_RX, NEXTION_TX);
-  vTaskDelay(pdMS_TO_TICKS(800));
+  vTaskDelay(pdMS_TO_TICKS(1000));
 
-  // Navega para a tela principal — sem aguardar hardware (a tela ja inicia)
-  _nextionCmd("page dock_status");
+  // Força página 1 (dock_status) por número — cobre o reboot pós-unlock onde
+  // o Nextion retém a página 15 (bloqueio) enquanto o ESP32 ainda não enviou comandos.
+  _nextionCmd("page 1");
   vTaskDelay(pdMS_TO_TICKS(300));
 
   // Limpa todos os slots de canetas e cartuchos
