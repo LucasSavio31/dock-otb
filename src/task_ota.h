@@ -430,7 +430,30 @@ void taskOTA(void *param) {
     if (strlen(ssid) > 0) {
       Serial.printf("OTA_INFO:Auto-conectando WiFi salvo: %s\n", ssid);
       _otaConnectWifi(); // ignora falha — dispositivo pode estar sem rede no boot
-      _otaSetState(OTA_STATE_IDLE); // garante estado limpo após auto-connect
+      _otaSetState(OTA_STATE_IDLE);
+
+      // Auto-verifica releases no GitHub logo após o boot
+      if (WiFi.status() == WL_CONNECTED) {
+        char latestVer[16]    = {0};
+        char downloadUrl[256] = {0};
+        Serial.println("OTA_INFO:Verificando releases no GitHub...");
+        bool found = _otaCheckGithub(latestVer, sizeof(latestVer),
+                                     downloadUrl, sizeof(downloadUrl));
+        if (found) {
+          bool available = (strcasecmp(latestVer, FIRMWARE_VERSION) != 0);
+          if (xSemaphoreTake(mutexOta, pdMS_TO_TICKS(100)) == pdTRUE) {
+            strncpy(gOtaStatus.latestVersion, latestVer,
+                    sizeof(gOtaStatus.latestVersion) - 1);
+            gOtaStatus.updateAvailable = available;
+            gOtaStatus.state = OTA_STATE_IDLE;
+            xSemaphoreGive(mutexOta);
+          }
+          Serial.printf("OTA_CHECK_OK:fw=%s,latest=%s,available=%d\n",
+                        FIRMWARE_VERSION, latestVer, available ? 1 : 0);
+        } else {
+          _otaSetState(OTA_STATE_IDLE); // falha silenciosa — não trava em done_err
+        }
+      }
     }
   }
 
@@ -510,9 +533,16 @@ void taskOTA(void *param) {
     prefs.end();
     bool wOk = (WiFi.status() == WL_CONNECTED);
     String wIp = wOk ? WiFi.localIP().toString() : "";
+    // Usa latestVersion já descoberto pelo auto-check (ou "-" se check não rodou/falhou)
+    char latVer[16] = "-";
+    if (xSemaphoreTake(mutexOta, pdMS_TO_TICKS(100)) == pdTRUE) {
+      strncpy(latVer, gOtaStatus.latestVersion, sizeof(latVer) - 1);
+      xSemaphoreGive(mutexOta);
+    }
+    if (latVer[0] == '\0') strncpy(latVer, "-", sizeof(latVer) - 1);
     Serial.printf(
-      "OTA_STATUS:state=idle,fw=%s,latest=-,wifi=%s,wifiok=%d,ip=%s,pending=0,running=%s,boot=%s\n",
-      FIRMWARE_VERSION, ssid, wOk ? 1 : 0, wIp.c_str(),
+      "OTA_STATUS:state=idle,fw=%s,latest=%s,wifi=%s,wifiok=%d,ip=%s,pending=0,running=%s,boot=%s\n",
+      FIRMWARE_VERSION, latVer, ssid, wOk ? 1 : 0, wIp.c_str(),
       running ? running->label : "?",
       running ? running->label : "?");
   }
