@@ -19,8 +19,13 @@
 #define BOMBA_LEDC_FREQ     1000              // Hz
 #define BOMBA_LEDC_RES      LEDC_TIMER_8_BIT // 0–255
 
-static void _bombaSetDuty(uint8_t duty) {
-  ledc_set_duty(LEDC_HIGH_SPEED_MODE, BOMBA_LEDC_CHANNEL, duty);
+// 100 % lógico = 50 % de duty cycle real (HW máximo = 128/255)
+// Todos os callers passam % lógico (0-100); a conversão física fica aqui.
+#define BOMBA_HW_MAX 128
+
+static void _bombaSetDuty(uint8_t pct) {
+  uint8_t hw = (uint8_t)((uint16_t)pct * BOMBA_HW_MAX / 100);
+  ledc_set_duty(LEDC_HIGH_SPEED_MODE, BOMBA_LEDC_CHANNEL, hw);
   ledc_update_duty(LEDC_HIGH_SPEED_MODE, BOMBA_LEDC_CHANNEL);
 }
 
@@ -116,7 +121,7 @@ void taskAtuadores(void *param) {
           purgeStartMs = 0;  // cancela purga se ativa
           if (!stVal[1] && !stVal[2] && !stVal[3]) erroSetar(ERR_E302);
           else                                      erroClear(ERR_E302);
-          _bombaSetDuty(255);
+          _bombaSetDuty(100);
           Serial.println("[Atuadores] BOMBA -> ON (100%)");
           break;
         case ControleCmd::BOMBA_OFF:
@@ -129,8 +134,7 @@ void taskAtuadores(void *param) {
           purgeStartMs = 0;
           if (cc.payload > 0 && !stVal[1] && !stVal[2] && !stVal[3]) erroSetar(ERR_E302);
           else                                                          erroClear(ERR_E302);
-          uint8_t duty = (uint8_t)((cc.payload / 100.0f) * 255.0f);
-          _bombaSetDuty(duty);
+          _bombaSetDuty(cc.payload); // % lógico → conversão HW feita em _bombaSetDuty
           gBombaDuty = cc.payload;
           Serial.printf("[Atuadores] BOMBA duty=%d%%\n", cc.payload);
           break;
@@ -148,7 +152,7 @@ void taskAtuadores(void *param) {
             // Inicia purga temporizada
             if (!stVal[1] && !stVal[2] && !stVal[3]) erroSetar(ERR_E302);
             else                                      erroClear(ERR_E302);
-            _bombaSetDuty(255);
+            _bombaSetDuty(100);
             purgeStartMs = millis();
             Serial.printf("[Atuadores] BOMBA -> PURGA %dms\n", PURGE_DURATION_MS);
           } else {
