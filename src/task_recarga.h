@@ -1,40 +1,68 @@
 #pragma once
 // =============================================================
-//  task_recarga.h — V5
-//  Lógica de recarga de canetas
+//  task_recarga.h — V5.2
+//  Ciclo autônomo de recarga: posição 1 → 2 → 3
 //
-//  Algoritmo (malha aberta):
-//    0 – 60 % de nível → bomba 100 % duty
-//   60 – 95 % de nível → duty cai linearmente de 100 % → 20 %
-//       ≥ 95 %          → bomba OFF, válvula fecha, DONE
-//  Timeout 60 s         → para tudo, sinaliza ERR_E301
+//  Fluxo por posição:
+//    1. Detecta sensor I2C (gNivel[ch].leituraOk) + caneta NFC válida
+//       + cartucho ativo — se ausente, pula posição
+//    2. Estabiliza 5s (re-verifica presença a cada 500 ms)
+//    3. Lê nível:
+//        < 10 % → recarrega
+//       ≥ 60 % → pula (já carregado)
+//       10-60 % → sem ação
+//    4. Sequência de recarga:
+//        Abre válvula correspondente (1/2/3)
+//        Bomba 85 % → ao atingir 50 %: reduz para 40 %
+//        Ao atingir 85 %: bomba OFF → 200 ms → válvula OFF
+//    5. Grava NFC:
+//        Caneta  → ciclos++, vida-- (INATIVO quando vida=0)
+//        Cartucho → ciclos++, vida-=5 (INATIVO quando vida=0)
+//        gCartLevel[cor] -= 5
 //
-//  Funciona standalone (sem dashboard) ou com dashboard conectado.
-//  Publica "RECHARGE_STATUS:<ch>,<nivel>,<duty>,<estado>" a cada 500 ms.
+//  Protocolo serial:
+//    RECHARGE_STATUS:<ch>,<nivel>,<duty>,<estado>
+//    Estados: NO_DEVICE | DETECTING | SKIP_FULL | SKIP_LEVEL_OK |
+//             RUNNING | TAPERING | DONE | TIMEOUT | SENSOR_ERR | ABORTED
 // =============================================================
 #include "shared.h"
 #include "task_erros.h"
 #include <Preferences.h>
 
-// ── Globals (definidos em main.cpp) ──────────────────────────
+// ── Globals (definidos aqui, extern em shared.h) ─────────────
 RechargeInfo      gRecharge    = { RechargeInfo::IDLE, 0, 0.0f, 0, 0 };
 SemaphoreHandle_t mutexRecharge = nullptr;
 
-#define RECHARGE_TIMEOUT_MS   60000   // 60 s
-#define RECHARGE_LEVEL_TAPER  60.0f   // % a partir do qual reduz duty
-#define RECHARGE_LEVEL_DONE   95.0f   // % para considerar cheio
-#define RECHARGE_DUTY_MAX    100
-#define RECHARGE_DUTY_MIN     20
+// ── Constantes ───────────────────────────────────────────────
+#define RECHARGE_TIMEOUT_MS      90000   // timeout de segurança (ms)
+#define RECHARGE_LEVEL_NEED      10.0f   // nível crítico: abaixo → recarrega
+#define RECHARGE_LEVEL_SKIP      60.0f   // nível bom: acima → pula
+#define RECHARGE_LEVEL_TAPER     50.0f   // ponto de redução de duty
+#define RECHARGE_LEVEL_DONE      85.0f   // nível de conclusão
+#define RECHARGE_DUTY_FILL       85      // duty inicial (%)
+#define RECHARGE_DUTY_TAPER      40      // duty reduzido após 50 % (%)
+#define RECHARGE_STABILIZE_MS    5000    // estabilização antes de checar nível (ms)
+#define RECHARGE_CYCLE_IDLE_MS   15000   // pausa entre varreduras completas (ms)
+#define TAG_STATUS_INATIVO       5       // status de tag inativa (vida = 0)
 
-// ── Helper ────────────────────────────────────────────────────
+// ── Helpers internos ─────────────────────────────────────────
+
 static void _rechargeControl(ControleCmd::Type type, uint8_t payload = 0) {
   ControleCmd cmd{ type, payload };
   xQueueSend(qControleCmd, &cmd, pdMS_TO_TICKS(100));
 }
 
-static void _rechargeStop(uint8_t channel) {
+// Parada de emergência — corta bomba e válvula sem delay
+static void _rechargeAbort(uint8_t ch) {
   _rechargeControl(ControleCmd::BOMBA_OFF);
-  _rechargeControl(ControleCmd::VALVULA_OFF, channel + 1);
+  _rechargeControl(ControleCmd::VALVULA_OFF, ch + 1);
+}
+
+// Finalização normal — bomba para, aguarda 200 ms, fecha válvula
+static void _rechargeFinish(uint8_t ch) {
+  _rechargeControl(ControleCmd::BOMBA_OFF);
+  vTaskDelay(pdMS_TO_TICKS(200));
+  _rechargeControl(ControleCmd::VALVULA_OFF, ch + 1);
 }
 
 static void _rechargeIncrementPersistentCount() {
@@ -47,7 +75,6 @@ static void _rechargeIncrementPersistentCount() {
   xSemaphoreGive(mutexNVS);
 }
 
-// Envia CMD_GRAVAR para taskNFC escrever de volta na tag de um leitor
 static void _gravarTagNFC(uint8_t readerIdx, const TagData &d) {
   SerialCmd sc{};
   sc.type      = SerialCmd::CMD_GRAVAR;
@@ -56,7 +83,7 @@ static void _gravarTagNFC(uint8_t readerIdx, const TagData &d) {
   xQueueSend(qSerialCmd, &sc, pdMS_TO_TICKS(100));
 }
 
-// Atualiza tag da caneta após recarga concluída
+// Grava caneta pós-recarga: ciclos++, vida--, INATIVO se vida zerar
 static void _salvarTagCaneta(uint8_t ch) {
   if (xSemaphoreTake(mutexTag, pdMS_TO_TICKS(30)) != pdTRUE) return;
   if (!gTagReaders[ch].valid || !gTagReaders[ch].presente) {
@@ -67,21 +94,27 @@ static void _salvarTagCaneta(uint8_t ch) {
   xSemaphoreGive(mutexTag);
 
   d.ciclos++;
-  d.status = 1; // OK / carregada
+  if (d.vida > 0) d.vida--;
+  d.status = (d.vida == 0) ? TAG_STATUS_INATIVO : 1;
 
-  // Atualiza cache local antes de enviar para fila
   if (xSemaphoreTake(mutexTag, pdMS_TO_TICKS(30)) == pdTRUE) {
     gTagReaders[ch].data = d;
     xSemaphoreGive(mutexTag);
   }
   _gravarTagNFC(ch, d);
+
+  if (d.vida == 0)
+    logdbPublishf("Recarga", "CanetatInativa", LOG_WARN,
+                  "Caneta %u inativa (vida=0, ciclos=%u).", (unsigned)(ch + 1), d.ciclos);
+
   logdbPublishf("Recarga", "TagCaneta", LOG_SUCCESS,
-                "Caneta %u: ciclos=%u status=%u gravados no NFC.", (unsigned)(ch+1), d.ciclos, d.status);
+                "Caneta %u: ciclos=%u vida=%u status=%u gravados no NFC.",
+                (unsigned)(ch + 1), d.ciclos, d.vida, d.status);
 }
 
-// Atualiza tag do cartucho após recarga concluída
+// Grava cartucho pós-recarga: ciclos++, vida-=5, INATIVO se vida zerar
 static void _salvarTagCartucho(uint8_t ch) {
-  uint8_t rc = ch + 3; // leitor do cartucho
+  uint8_t rc = ch + 3;
   if (xSemaphoreTake(mutexTag, pdMS_TO_TICKS(30)) != pdTRUE) return;
   if (!gTagReaders[rc].valid || !gTagReaders[rc].presente) {
     xSemaphoreGive(mutexTag);
@@ -90,10 +123,17 @@ static void _salvarTagCartucho(uint8_t ch) {
   TagData d = gTagReaders[rc].data;
   xSemaphoreGive(mutexTag);
 
-  // vida representa % de tinta restante (0-100); decrementa 5 por recarga
+  d.ciclos++;
   if (d.vida >= 5) d.vida -= 5;
   else             d.vida  = 0;
-  d.ciclos++;
+
+  if (d.vida == 0) {
+    d.status = TAG_STATUS_INATIVO;
+    // Zera o nível virtual na cor correspondente
+    if (d.cor >= COR_VERMELHO && d.cor <= COR_AMARELO) gCartLevel[d.cor] = 0;
+    logdbPublishf("Recarga", "CartuchoInativo", LOG_WARN,
+                  "Cartucho %u inativo (vida=0, ciclos=%u).", (unsigned)(ch + 1), d.ciclos);
+  }
 
   if (xSemaphoreTake(mutexTag, pdMS_TO_TICKS(30)) == pdTRUE) {
     gTagReaders[rc].data = d;
@@ -101,175 +141,247 @@ static void _salvarTagCartucho(uint8_t ch) {
   }
   _gravarTagNFC(rc, d);
   logdbPublishf("Recarga", "TagCartucho", LOG_SUCCESS,
-                "Cartucho %u: vida=%u ciclos=%u gravados no NFC.", (unsigned)(ch+1), d.vida, d.ciclos);
+                "Cartucho %u: ciclos=%u vida=%u gravados no NFC.",
+                (unsigned)(ch + 1), d.ciclos, d.vida);
+}
+
+// Verifica se a posição tem sensor I2C + caneta ativa + cartucho ativo.
+// Preenche *outLevel com o nível atual se retornar true.
+static bool _posicaoApta(uint8_t ch, float *outLevel) {
+  // Sensor I2C
+  bool  sensorOk = false;
+  float level    = 0.0f;
+  if (xSemaphoreTake(mutexNivel, pdMS_TO_TICKS(20)) == pdTRUE) {
+    sensorOk = gNivel[ch].leituraOk;
+    level    = gNivel[ch].nivelPct;
+    xSemaphoreGive(mutexNivel);
+  }
+  if (!sensorOk) return false;
+
+  // Caneta: presente, dados válidos, vida > 0, não INATIVO
+  if (xSemaphoreTake(mutexTag, pdMS_TO_TICKS(20)) == pdTRUE) {
+    bool ok = gTagReaders[ch].presente &&
+              gTagReaders[ch].valid    &&
+              gTagReaders[ch].data.vida   > 0 &&
+              gTagReaders[ch].data.status != TAG_STATUS_INATIVO;
+    xSemaphoreGive(mutexTag);
+    if (!ok) return false;
+  } else return false;
+
+  // Cartucho: presente, dados válidos, vida > 0, não INATIVO, cor com nível > 0
+  if (xSemaphoreTake(mutexTag, pdMS_TO_TICKS(20)) == pdTRUE) {
+    uint8_t rc = ch + 3;
+    bool ok = gTagReaders[rc].presente &&
+              gTagReaders[rc].valid    &&
+              gTagReaders[rc].data.vida   > 0 &&
+              gTagReaders[rc].data.status != TAG_STATUS_INATIVO;
+    if (ok) {
+      TagCor cor = gTagReaders[rc].data.cor;
+      if (cor >= COR_VERMELHO && cor <= COR_AMARELO && gCartLevel[cor] == 0)
+        ok = false;
+    }
+    xSemaphoreGive(mutexTag);
+    if (!ok) return false;
+  } else return false;
+
+  if (outLevel) *outLevel = level;
+  return true;
 }
 
 // ── Task ──────────────────────────────────────────────────────
 void taskRecarga(void *param) {
-  vTaskDelay(pdMS_TO_TICKS(5000));
-  Serial.println("[Recarga] Task iniciada.");
-
-  RechargeInfo::Status state  = RechargeInfo::IDLE;
-  uint8_t  ch          = 0;
-  uint32_t startTime   = 0;
-  uint8_t  sensorErrCount = 0;
+  vTaskDelay(pdMS_TO_TICKS(8000));
+  Serial.println("[Recarga] Ciclo autonomo iniciado.");
 
   for (;;) {
-    // ── Recebe comando (aguarda até 500 ms) ───────────────────
-    RechargeCmd cmd;
-    if (xQueueReceive(qRechargeCmd, &cmd, pdMS_TO_TICKS(500)) == pdTRUE) {
+    // Drena fila antes de cada varredura (descarta comandos pendentes)
+    { RechargeCmd c; while (xQueueReceive(qRechargeCmd, &c, 0) == pdTRUE) {} }
 
-      if (cmd.type == RechargeCmd::STOP) {
-        if (state != RechargeInfo::IDLE) {
-          _rechargeStop(ch);
-          state = RechargeInfo::IDLE;
-          sensorErrCount = 0;
-          Serial.println("RECHARGE_STATUS:0,0,0,IDLE");
-          logdbPublish("Recarga", "Parada", LOG_WARN, "Recarga interrompida.");
-        }
+    if (gBloqueado) { vTaskDelay(pdMS_TO_TICKS(1000)); continue; }
 
-      } else { // START
-        if (state != RechargeInfo::IDLE) _rechargeStop(ch);
-        erroClear(ERR_E301);
+    // ── Varredura posições 1 → 2 → 3 ─────────────────────────
+    for (uint8_t ch = 0; ch < 3; ch++) {
 
-        ch = cmd.channel;
-        sensorErrCount = 0;
-        for (uint8_t v = 1; v <= 3; v++)
-          _rechargeControl(ControleCmd::VALVULA_OFF, v);
-        vTaskDelay(pdMS_TO_TICKS(100));
-        _rechargeControl(ControleCmd::VALVULA_ON, ch + 1);
-        vTaskDelay(pdMS_TO_TICKS(200));
-
-        _rechargeControl(ControleCmd::BOMBA_DUTY, RECHARGE_DUTY_MAX);
-
-        state     = RechargeInfo::RUNNING;
-        startTime = millis();
-        Serial.printf("RECHARGE_STATUS:%d,0,%d,RUNNING\n", ch, RECHARGE_DUTY_MAX);
-        logdbPublishf("Recarga", "Inicio", LOG_INFO, "Recarga iniciada na caneta %u.", (unsigned)(ch + 1));
-      }
-    }
-
-    if (state == RechargeInfo::IDLE) continue;
-
-    // ── Verifica timeout ──────────────────────────────────────
-    uint32_t elapsed = millis() - startTime;
-    if (elapsed > RECHARGE_TIMEOUT_MS) {
-      _rechargeStop(ch);
-      erroSetar(ERR_E301);
-      state = RechargeInfo::TIMEOUT;
-      Serial.printf("RECHARGE_STATUS:%d,%.1f,0,TIMEOUT\n", ch, gRecharge.levelPct);
-      logdbPublishf("Recarga", "Timeout", LOG_ERROR, "Timeout na caneta %u.", (unsigned)(ch + 1));
-      if (xSemaphoreTake(mutexRecharge, pdMS_TO_TICKS(10)) == pdTRUE) {
-        gRecharge.status = state; xSemaphoreGive(mutexRecharge);
-      }
-      state = RechargeInfo::IDLE;
-      sensorErrCount = 0;
-      continue;
-    }
-
-    // ── Lê nível do sensor ────────────────────────────────────
-    float levelPct = 0.0f;
-    float sensorPf = 0.0f;
-    bool  sensorOk = false;
-    bool  sensorSaturated = false;
-    if (xSemaphoreTake(mutexNivel, pdMS_TO_TICKS(20)) == pdTRUE) {
-      sensorOk = gNivel[ch].leituraOk;
-      levelPct = gNivel[ch].nivelPct;
-      sensorPf = gNivel[ch].pFAtual;
-      sensorSaturated = gNivel[ch].saturado;
-      xSemaphoreGive(mutexNivel);
-    }
-
-    // ── Detecção de erro de sensor ────────────────────────────
-    if (!sensorOk) {
-      sensorErrCount++;
-      if (sensorErrCount >= 5) {
-        _rechargeStop(ch);
-        erroSetar(ERR_E211 + ch);  // E211/E212/E213 por canal
-        state = RechargeInfo::SENSOR_ERR;
-        Serial.printf("RECHARGE_STATUS:%d,0,0,SENSOR_ERR\n", ch);
-        logdbPublishf("Recarga", "Falha", LOG_ERROR, "Erro de sensor na caneta %u.", (unsigned)(ch + 1));
-        if (xSemaphoreTake(mutexRecharge, pdMS_TO_TICKS(10)) == pdTRUE) {
-          gRecharge.status = state; xSemaphoreGive(mutexRecharge);
-        }
-        state = RechargeInfo::IDLE;
-        sensorErrCount = 0;
+      // ── 1. Detecção: sensor I2C + caneta NFC ─────────────
+      float levelPct = 0.0f;
+      if (!_posicaoApta(ch, &levelPct)) {
+        Serial.printf("RECHARGE_STATUS:%d,0,0,NO_DEVICE\n", ch);
         continue;
       }
-    } else {
-      sensorErrCount = 0;
-    }
 
-    // ── Calcula duty (malha aberta) ───────────────────────────
-    uint8_t duty = RECHARGE_DUTY_MAX;
-
-    if (sensorSaturated || levelPct >= 99.5f) {
-      // Sensor saturado → para imediatamente
-      _rechargeStop(ch);
-      duty  = 0;
-      state = RechargeInfo::SATURATED;
-      Serial.printf("[Recarga] Sensor saturado CH%d (%.3f pF / %.1f%%)\n", ch, sensorPf, levelPct);
-      logdbPublishf("Recarga", "Saturacao", LOG_WARN, "Sensor saturado na caneta %u.", (unsigned)(ch + 1));
-
-    } else if (levelPct >= RECHARGE_LEVEL_DONE) {
-      // Tanque cheio → para
-      _rechargeStop(ch);
-      duty  = 0;
-      state = RechargeInfo::DONE;
-      logdbPublishf("Recarga", "Concluida", LOG_SUCCESS, "Recarga concluida na caneta %u.", (unsigned)(ch + 1));
-
-    } else if (levelPct >= RECHARGE_LEVEL_TAPER) {
-      state = RechargeInfo::TAPERING;
-      float ratio = (levelPct - RECHARGE_LEVEL_TAPER) /
-                    (RECHARGE_LEVEL_DONE - RECHARGE_LEVEL_TAPER);
-      duty = (uint8_t)(RECHARGE_DUTY_MAX - ratio * (RECHARGE_DUTY_MAX - RECHARGE_DUTY_MIN));
-      if (duty < RECHARGE_DUTY_MIN) duty = RECHARGE_DUTY_MIN;
-      _rechargeControl(ControleCmd::BOMBA_DUTY, duty);
-    }
-
-    // ── Atualiza global ───────────────────────────────────────
-    if (xSemaphoreTake(mutexRecharge, pdMS_TO_TICKS(10)) == pdTRUE) {
-      gRecharge.status    = state;
-      gRecharge.channel   = ch;
-      gRecharge.levelPct  = levelPct;
-      gRecharge.dutyPct   = duty;
-      gRecharge.elapsedMs = elapsed;
-      xSemaphoreGive(mutexRecharge);
-    }
-
-    // ── Publica status no serial ──────────────────────────────
-    const char* stStr = "RUNNING";
-    switch (state) {
-      case RechargeInfo::TAPERING:   stStr = "TAPERING";   break;
-      case RechargeInfo::DONE:       stStr = "DONE";       break;
-      case RechargeInfo::SATURATED:  stStr = "SATURATED";  break;
-      default: break;
-    }
-    Serial.printf("RECHARGE_STATUS:%d,%.1f,%d,%s\n", ch, levelPct, duty, stStr);
-
-    if (state == RechargeInfo::DONE || state == RechargeInfo::SATURATED) {
-      _rechargeIncrementPersistentCount();
-
-      // Decrementa nível virtual do cartucho pela cor da tag
-      TagCor cor = COR_DESCONHECIDA;
-      if (xSemaphoreTake(mutexTag, pdMS_TO_TICKS(20)) == pdTRUE) {
-        uint8_t rc = ch + 3;
-        if (rc < 6 && gTagReaders[rc].valid)
-          cor = gTagReaders[rc].data.cor;
-        xSemaphoreGive(mutexTag);
+      // ── 2. Estabilização 5 s ──────────────────────────────
+      Serial.printf("RECHARGE_STATUS:%d,%.1f,0,DETECTING\n", ch, levelPct);
+      bool stable = true;
+      for (uint32_t t = 0; t < RECHARGE_STABILIZE_MS && stable; t += 500) {
+        vTaskDelay(pdMS_TO_TICKS(500));
+        if (!_posicaoApta(ch, &levelPct)) { stable = false; break; }
+        RechargeCmd sc;
+        if (xQueuePeek(qRechargeCmd, &sc, 0) == pdTRUE && sc.type == RechargeCmd::STOP) {
+          xQueueReceive(qRechargeCmd, &sc, 0);
+          stable = false;
+        }
       }
-      if (cor >= COR_VERMELHO && cor <= COR_AMARELO) {
-        if (gCartLevel[cor] >= 5) gCartLevel[cor] -= 5;
-        else                       gCartLevel[cor]  = 0;
+      if (!stable) continue;
+
+      // Relê nível após estabilização
+      if (xSemaphoreTake(mutexNivel, pdMS_TO_TICKS(20)) == pdTRUE) {
+        levelPct = gNivel[ch].nivelPct;
+        xSemaphoreGive(mutexNivel);
       }
-      gRechargeCount++;
 
-      // Grava dados atualizados nas tags NFC da caneta e do cartucho
-      _salvarTagCaneta(ch);
-      _salvarTagCartucho(ch);
+      // ── 3. Verificação de nível ───────────────────────────
+      if (levelPct >= RECHARGE_LEVEL_SKIP) {
+        Serial.printf("RECHARGE_STATUS:%d,%.1f,0,SKIP_FULL\n", ch, levelPct);
+        logdbPublishf("Recarga", "Pulada", LOG_INFO,
+                      "Pos %u pulada: nivel=%.1f%% >= %.0f%%.",
+                      (unsigned)(ch + 1), levelPct, RECHARGE_LEVEL_SKIP);
+        continue;
+      }
+      if (levelPct >= RECHARGE_LEVEL_NEED) {
+        // Entre 10 % e 60 %: sem ação
+        Serial.printf("RECHARGE_STATUS:%d,%.1f,0,SKIP_LEVEL_OK\n", ch, levelPct);
+        continue;
+      }
 
-      state = RechargeInfo::IDLE;
-      sensorErrCount = 0;
+      // ── 4. Recarrega ─────────────────────────────────────
+      logdbPublishf("Recarga", "Inicio", LOG_INFO,
+                    "Pos=%u nivel=%.1f%% — iniciando recarga.", (unsigned)(ch + 1), levelPct);
+      erroClear(ERR_E301);
+
+      // Abre válvula correspondente à posição
+      _rechargeControl(ControleCmd::VALVULA_ON, ch + 1);
+      vTaskDelay(pdMS_TO_TICKS(300));
+
+      // Bomba a 85 %
+      _rechargeControl(ControleCmd::BOMBA_DUTY, RECHARGE_DUTY_FILL);
+
+      RechargeInfo::Status state = RechargeInfo::RUNNING;
+      uint32_t startMs     = millis();
+      uint8_t  sensorErrCnt = 0;
+      bool     tapered     = false;
+      bool     success     = false;
+      uint8_t  duty        = RECHARGE_DUTY_FILL;
+
+      if (xSemaphoreTake(mutexRecharge, pdMS_TO_TICKS(10)) == pdTRUE) {
+        gRecharge = { RechargeInfo::RUNNING, ch, levelPct, duty, 0 };
+        xSemaphoreGive(mutexRecharge);
+      }
+      Serial.printf("RECHARGE_STATUS:%d,%.1f,%d,RUNNING\n", ch, levelPct, duty);
+
+      // ── Malha de controle ────────────────────────────────
+      while (state == RechargeInfo::RUNNING || state == RechargeInfo::TAPERING) {
+
+        // Abort por STOP
+        { RechargeCmd sc;
+          if (xQueueReceive(qRechargeCmd, &sc, 0) == pdTRUE && sc.type == RechargeCmd::STOP) {
+            _rechargeAbort(ch);
+            state = RechargeInfo::IDLE;
+            Serial.printf("RECHARGE_STATUS:%d,%.1f,0,ABORTED\n", ch, levelPct);
+            logdbPublishf("Recarga", "Abortada", LOG_WARN,
+                          "Pos=%u abortada por comando.", (unsigned)(ch + 1));
+            break;
+          }
+        }
+
+        vTaskDelay(pdMS_TO_TICKS(500));
+
+        uint32_t elapsed = millis() - startMs;
+
+        // Timeout de segurança
+        if (elapsed > RECHARGE_TIMEOUT_MS) {
+          _rechargeAbort(ch);
+          erroSetar(ERR_E301);
+          state = RechargeInfo::TIMEOUT;
+          Serial.printf("RECHARGE_STATUS:%d,%.1f,0,TIMEOUT\n", ch, levelPct);
+          logdbPublishf("Recarga", "Timeout", LOG_ERROR,
+                        "Timeout pos=%u (%lus).", (unsigned)(ch + 1), (unsigned long)(elapsed / 1000));
+          break;
+        }
+
+        // Lê sensor
+        bool sensorOk = false;
+        if (xSemaphoreTake(mutexNivel, pdMS_TO_TICKS(20)) == pdTRUE) {
+          sensorOk = gNivel[ch].leituraOk;
+          levelPct = gNivel[ch].nivelPct;
+          xSemaphoreGive(mutexNivel);
+        }
+
+        if (!sensorOk) {
+          if (++sensorErrCnt >= 5) {
+            _rechargeAbort(ch);
+            erroSetar(ERR_E211 + ch);
+            state = RechargeInfo::SENSOR_ERR;
+            Serial.printf("RECHARGE_STATUS:%d,0,0,SENSOR_ERR\n", ch);
+            logdbPublishf("Recarga", "Falha", LOG_ERROR,
+                          "Sensor err pos=%u.", (unsigned)(ch + 1));
+            break;
+          }
+        } else {
+          sensorErrCnt = 0;
+
+          if (levelPct >= RECHARGE_LEVEL_DONE) {
+            // Bomba OFF → 200 ms → válvula OFF
+            _rechargeFinish(ch);
+            duty    = 0;
+            state   = RechargeInfo::DONE;
+            success = true;
+            logdbPublishf("Recarga", "Concluida", LOG_SUCCESS,
+                          "Pos=%u concluida nivel=%.1f%%.", (unsigned)(ch + 1), levelPct);
+
+          } else if (!tapered && levelPct >= RECHARGE_LEVEL_TAPER) {
+            // Reduz duty a 40 % ao atingir 50 %
+            tapered = true;
+            duty    = RECHARGE_DUTY_TAPER;
+            _rechargeControl(ControleCmd::BOMBA_DUTY, duty);
+            state   = RechargeInfo::TAPERING;
+            Serial.printf("RECHARGE_STATUS:%d,%.1f,%d,TAPERING\n", ch, levelPct, duty);
+          }
+        }
+
+        // Atualiza global
+        if (xSemaphoreTake(mutexRecharge, pdMS_TO_TICKS(10)) == pdTRUE) {
+          gRecharge = { state, ch, levelPct, duty, elapsed };
+          xSemaphoreGive(mutexRecharge);
+        }
+
+        if (state == RechargeInfo::RUNNING || state == RechargeInfo::TAPERING)
+          Serial.printf("RECHARGE_STATUS:%d,%.1f,%d,%s\n", ch, levelPct, duty,
+                        state == RechargeInfo::TAPERING ? "TAPERING" : "RUNNING");
+        else if (state == RechargeInfo::DONE)
+          Serial.printf("RECHARGE_STATUS:%d,%.1f,0,DONE\n", ch, levelPct);
+      }
+
+      // ── 5. Pós-recarga ────────────────────────────────────
+      if (success) {
+        _rechargeIncrementPersistentCount();
+        gRechargeCount++;
+
+        // Decrementa nível virtual do cartucho pela cor da tag
+        TagCor cor = COR_DESCONHECIDA;
+        if (xSemaphoreTake(mutexTag, pdMS_TO_TICKS(20)) == pdTRUE) {
+          uint8_t rc = ch + 3;
+          if (rc < 6 && gTagReaders[rc].valid) cor = gTagReaders[rc].data.cor;
+          xSemaphoreGive(mutexTag);
+        }
+        if (cor >= COR_VERMELHO && cor <= COR_AMARELO) {
+          if (gCartLevel[cor] >= 5) gCartLevel[cor] -= 5;
+          else                       gCartLevel[cor]  = 0;
+        }
+
+        // Grava dados nas tags NFC
+        _salvarTagCaneta(ch);
+        _salvarTagCartucho(ch);
+
+        if (xSemaphoreTake(mutexRecharge, pdMS_TO_TICKS(10)) == pdTRUE) {
+          gRecharge.status = RechargeInfo::IDLE;
+          xSemaphoreGive(mutexRecharge);
+        }
+      }
+
+      vTaskDelay(pdMS_TO_TICKS(500)); // pausa entre posições
     }
+
+    // Aguarda antes da próxima varredura completa
+    vTaskDelay(pdMS_TO_TICKS(RECHARGE_CYCLE_IDLE_MS));
   }
 }

@@ -19,7 +19,8 @@ static String _statusTextoSerial(uint8_t s) {
   switch (s) {
     case 0: return "Vazio";   case 1: return "OK";
     case 2: return "Em uso";  case 3: return "Bloqueado";
-    case 4: return "Erro";    default: return "Desconhecido";
+    case 4: return "Erro";    case 5: return "Inativo";
+    default: return "Desconhecido";
   }
 }
 
