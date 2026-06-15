@@ -156,7 +156,23 @@ static bool _otaCheckGithub(char *latestVer, size_t verLen,
     "/%s/%s/main/firmware/version.json?t=%lu",
     OTA_GITHUB_OWNER, OTA_GITHUB_REPO, (unsigned long)esp_random());
 
+  // mbedTLS precisa de ~40KB contíguos para o handshake SSL
+  uint32_t maxAlloc = ESP.getMaxAllocHeap();
+  if (maxAlloc < 45000) {
+    Serial.printf("OTA_ERR:Heap insuficiente para SSL (%u bytes contiguos). Aguardando...\n", maxAlloc);
+    vTaskDelay(pdMS_TO_TICKS(10000));
+    maxAlloc = ESP.getMaxAllocHeap();
+    if (maxAlloc < 40000) {
+      Serial.printf("OTA_ERR:Heap ainda insuficiente (%u bytes). Abortando check.\n", maxAlloc);
+      return false;
+    }
+  }
+
   WiFiClientSecure *client = new WiFiClientSecure();
+  if (!client) {
+    Serial.println("OTA_ERR:Falha ao alocar WiFiClientSecure (heap esgotado)");
+    return false;
+  }
   client->setInsecure();
 
   HTTPClient http;
@@ -166,7 +182,8 @@ static bool _otaCheckGithub(char *latestVer, size_t verLen,
   http.setConnectTimeout(12000);
 
   _otaSetState(OTA_STATE_CHECKING);
-  Serial.println("OTA_INFO:Consultando versao no repositorio...");
+  Serial.printf("OTA_INFO:Consultando versao no repositorio... (heap livre: %u bytes)\n",
+                esp_get_free_heap_size());
 
   int code = http.GET();
 
@@ -176,7 +193,8 @@ static bool _otaCheckGithub(char *latestVer, size_t verLen,
     return false;
   }
   if (code <= 0) {
-    Serial.printf("OTA_ERR:Falha SSL/TCP (cod=%d). Verifique DNS e heap livre.\n", code);
+    Serial.printf("OTA_ERR:Falha SSL/TCP (cod=%d, heap livre: %u bytes).\n",
+                  code, esp_get_free_heap_size());
     http.end(); delete client;
     return false;
   }

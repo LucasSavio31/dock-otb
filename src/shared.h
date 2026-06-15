@@ -3,7 +3,7 @@
 //  shared.h - V5
 //  Tipos, handles globais e estado compartilhado
 // =============================================================
-#define FIRMWARE_VERSION "V1.8.6"
+#define FIRMWARE_VERSION "V1.8.7"
 #include <Arduino.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
@@ -161,7 +161,7 @@ struct StoredLogEntry {
   char        description[64];
 };
 
-constexpr uint16_t LOGDB_CAPACITY = 300;
+constexpr uint16_t LOGDB_CAPACITY = 100;
 
 extern QueueHandle_t     qLogEvent;
 extern SemaphoreHandle_t mutexLogDb;
