@@ -16,6 +16,7 @@
 #include "task_recarga.h"
 #include "task_logdb.h"
 #include "task_ota.h"
+#include "task_ota_autocheck.h"
 #include "task_violacao.h"
 
 // =========================
