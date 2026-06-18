@@ -302,7 +302,7 @@ static void _publicarEvento(TagEvent::Type type, const TagData *data = nullptr,
 static uint8_t _verificarLeitores() {
   uint8_t okMask = 0;
 
-  // Todos CS em HIGH antes de comecar (D2 não está mais no array)
+  // Todos CS em HIGH antes de comecar
   for (uint8_t i = 0; i < 6; i++) {
     if (NFC_CS_PINS[i] == LED2) continue;
     pinMode(NFC_CS_PINS[i], OUTPUT);
@@ -310,15 +310,31 @@ static uint8_t _verificarLeitores() {
   }
 
   for (uint8_t i = 0; i < 6; i++) {
-    Adafruit_PN532 nfcTmp(NFC_CS_PINS[i], &SPI);
-    nfcTmp.begin();
-    // Re-assert todos os CS HIGH
-    for (uint8_t j = 0; j < 6; j++) {
-      if (NFC_CS_PINS[j] == LED2) continue;
-      digitalWrite(NFC_CS_PINS[j], HIGH);
+    uint32_t fw = 0;
+
+    // Ate 3 tentativas por leitor — D5 pode precisar de reset apos outros begin()
+    for (uint8_t attempt = 0; attempt < 3 && !fw; attempt++) {
+      if (attempt > 0) {
+        Serial.printf("[NFC] %s (CS=D%d): tentativa %u...\n",
+                      NFC_NOMES[i], NFC_CS_PINS[i], attempt + 1);
+        // Re-deselect todos e aguarda antes de retry
+        for (uint8_t j = 0; j < 6; j++) {
+          if (NFC_CS_PINS[j] == LED2) continue;
+          digitalWrite(NFC_CS_PINS[j], HIGH);
+        }
+        vTaskDelay(pdMS_TO_TICKS(150));
+      }
+
+      Adafruit_PN532 nfcTmp(NFC_CS_PINS[i], &SPI);
+      nfcTmp.begin();
+      // Re-assert todos CS HIGH apos begin() (lib pode ter reconfigurado D5)
+      for (uint8_t j = 0; j < 6; j++) {
+        if (NFC_CS_PINS[j] == LED2) continue;
+        digitalWrite(NFC_CS_PINS[j], HIGH);
+      }
+      vTaskDelay(pdMS_TO_TICKS(30));
+      fw = nfcTmp.getFirmwareVersion();
     }
-    vTaskDelay(pdMS_TO_TICKS(30));
-    uint32_t fw = nfcTmp.getFirmwareVersion();
 
     if (fw) {
       erroClear(NFC_ERR_IDX[i]);
@@ -405,6 +421,42 @@ void taskNFC(void *param) {
 
   for (;;) {
     uint32_t now = millis();
+
+    // ── Recuperação periódica de leitores offline (a cada 30s) ──
+    {
+      static uint32_t ultimaRecuperacaoMs = 0;
+      uint8_t failMask = (~nfcReaderOkMask) & 0x3F;
+      if (failMask && (now - ultimaRecuperacaoMs) >= 30000) {
+        ultimaRecuperacaoMs = now;
+        if (xSemaphoreTake(mutexSPI, pdMS_TO_TICKS(500)) == pdTRUE) {
+          for (uint8_t r = 0; r < NFC_POLL_READERS; r++) {
+            if (!(failMask & (1 << r))) continue;
+            for (uint8_t j = 0; j < 6; j++) {
+              if (NFC_CS_PINS[j] == LED2) continue;
+              digitalWrite(NFC_CS_PINS[j], HIGH);
+            }
+            nfcReaders[r]->begin();
+            for (uint8_t j = 0; j < 6; j++) {
+              if (NFC_CS_PINS[j] == LED2) continue;
+              digitalWrite(NFC_CS_PINS[j], HIGH);
+            }
+            vTaskDelay(pdMS_TO_TICKS(50));
+            uint32_t fw = nfcReaders[r]->getFirmwareVersion();
+            if (fw) {
+              nfcReaders[r]->SAMConfig();
+              vTaskDelay(pdMS_TO_TICKS(20));
+              nfcReaderOkMask |= (1 << r);
+              erroClear(NFC_ERR_IDX[r]);
+              Serial.printf("[NFC] Leitor %u (CS=D%d) recuperado automaticamente.\n",
+                            r + 1, NFC_CS_PINS[r]);
+            }
+            digitalWrite(NFC_CS_PINS[r], HIGH);
+            vTaskDelay(pdMS_TO_TICKS(30));
+          }
+          xSemaphoreGive(mutexSPI);
+        }
+      }
+    }
 
     // ── Reinit apos _menuDiag resetar os chips via SPI ────────
     if (nfcReinitPending) {
