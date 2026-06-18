@@ -441,8 +441,9 @@ static void _dockSlot(uint8_t c, bool presente, bool valid, const TagData &d) {
   _nextionCmd(cmd);
 
   if (presente) {
-    snprintf(cmd, sizeof(cmd), "vis %s,1", _dsLA[c]); _nextionCmd(cmd);
-    snprintf(cmd, sizeof(cmd), "vis %s,1", _dsLB[c]); _nextionCmd(cmd);
+    snprintf(cmd, sizeof(cmd), "vis %s,1", _dsLA[c]);  _nextionCmd(cmd);
+    snprintf(cmd, sizeof(cmd), "vis %s,1", _dsLB[c]);  _nextionCmd(cmd);
+    snprintf(cmd, sizeof(cmd), "vis %s,1", _dsLvl[c]); _nextionCmd(cmd);
 
     if (valid) {
       // Dados NFC disponiveis: mostra serial (t5/t8/t12) e ciclos (t4/t9/t13)
@@ -459,7 +460,6 @@ static void _dockSlot(uint8_t c, bool presente, bool valid, const TagData &d) {
     }
 
     // Barra de nivel: usa sensor se disponivel, senao nivel virtual
-    // Aparece assim que o cartucho e detectado (independe do NFC)
     uint8_t lvl = (uint8_t)gCartLevel[c + 1];
     if (xSemaphoreTake(mutexNivel, pdMS_TO_TICKS(10)) == pdTRUE) {
       if (gNivel[c].leituraOk) {
@@ -472,6 +472,7 @@ static void _dockSlot(uint8_t c, bool presente, bool valid, const TagData &d) {
   } else {
     snprintf(cmd, sizeof(cmd), "vis %s,0", _dsLA[c]);  _nextionCmd(cmd);
     snprintf(cmd, sizeof(cmd), "vis %s,0", _dsLB[c]);  _nextionCmd(cmd);
+    snprintf(cmd, sizeof(cmd), "vis %s,0", _dsLvl[c]); _nextionCmd(cmd);
     snprintf(cmd, sizeof(cmd), "vis %s,0", _dsSer[c]); _nextionCmd(cmd);
     snprintf(cmd, sizeof(cmd), "vis %s,0", _dsCic[c]); _nextionCmd(cmd);
     _setValue(_dsLvl[c], 0);
@@ -798,12 +799,12 @@ void taskNextion(void *param) {
         case TagEvent::TAG_GRAVADA:
         case TagEvent::TAG_RESETADA:
           if (!naDock) _nextionMostrarReader(ev.readerIdx, ev.data);
-          if (ev.readerIdx >= 3) _dockStatusAtualizar();
+          _dockStatusAtualizar();
           break;
 
         case TagEvent::TAG_REMOVIDA:
           if (!naDock) _nextionLimparReader(ev.readerIdx);
-          if (ev.readerIdx >= 3) _dockStatusAtualizar();
+          _dockStatusAtualizar();
           break;
 
         case TagEvent::TAG_ERRO:
@@ -814,7 +815,7 @@ void taskNextion(void *param) {
               _setText(_cartStComp[ev.readerIdx - 3], "Erro");
             }
           }
-          if (ev.readerIdx >= 3) _dockStatusAtualizar();
+          _dockStatusAtualizar();
           break;
 
         default:
