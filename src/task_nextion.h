@@ -459,15 +459,9 @@ static void _dockSlot(uint8_t c, bool presente, bool valid, const TagData &d) {
       snprintf(cmd, sizeof(cmd), "vis %s,0", _dsCic[c]); _nextionCmd(cmd);
     }
 
-    // Barra de nivel: usa sensor se disponivel, senao nivel virtual
+    // Barra de nivel: nivel virtual do cartucho (gCartLevel).
+    // gNivel mede o nivel da CANETA durante a recarga — nao e usado aqui.
     uint8_t lvl = (uint8_t)gCartLevel[c + 1];
-    if (xSemaphoreTake(mutexNivel, pdMS_TO_TICKS(10)) == pdTRUE) {
-      if (gNivel[c].leituraOk) {
-        float pct = gNivel[c].nivelPct;
-        lvl = (pct < 0.0f) ? 0u : (pct > 100.0f) ? 100u : (uint8_t)pct;
-      }
-      xSemaphoreGive(mutexNivel);
-    }
     _setValue(_dsLvl[c], (uint32_t)lvl);
   } else {
     snprintf(cmd, sizeof(cmd), "vis %s,0", _dsLA[c]);  _nextionCmd(cmd);
