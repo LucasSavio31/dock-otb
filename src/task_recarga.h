@@ -1,11 +1,11 @@
 #pragma once
 // =============================================================
-//  task_recarga.h — V5.2
+//  task_recarga.h — V5.3
 //  Ciclo autônomo de recarga: posição 1 → 2 → 3
 //
 //  Fluxo por posição:
-//    1. Detecta sensor I2C (gNivel[ch].leituraOk) + caneta NFC válida
-//       + cartucho ativo — se ausente, pula posição
+//    1. Detecta sensor I2C (gNivel[ch].leituraOk) + caneta NFC presente
+//       — se ausente, pula posição (cartucho NÃO é requisito)
 //    2. Estabiliza 5s (re-verifica presença a cada 500 ms)
 //    3. Lê nível:
 //        < 10 % → recarrega
@@ -145,10 +145,11 @@ static void _salvarTagCartucho(uint8_t ch) {
                 (unsigned)(ch + 1), d.ciclos, d.vida);
 }
 
-// Verifica se a posição tem sensor I2C + caneta ativa + cartucho ativo.
+// Verifica se a posição tem sensor I2C lendo + caneta NFC identificada.
+// Cartucho não é requisito para iniciar recarga.
 // Preenche *outLevel com o nível atual se retornar true.
 static bool _posicaoApta(uint8_t ch, float *outLevel) {
-  // Sensor I2C
+  // Sensor I2C: deve estar lendo
   bool  sensorOk = false;
   float level    = 0.0f;
   if (xSemaphoreTake(mutexNivel, pdMS_TO_TICKS(20)) == pdTRUE) {
@@ -158,28 +159,9 @@ static bool _posicaoApta(uint8_t ch, float *outLevel) {
   }
   if (!sensorOk) return false;
 
-  // Caneta: presente, dados válidos, vida > 0, não INATIVO
+  // Caneta: presente e identificada pelo NFC
   if (xSemaphoreTake(mutexTag, pdMS_TO_TICKS(20)) == pdTRUE) {
-    bool ok = gTagReaders[ch].presente &&
-              gTagReaders[ch].valid    &&
-              gTagReaders[ch].data.vida   > 0 &&
-              gTagReaders[ch].data.status != TAG_STATUS_INATIVO;
-    xSemaphoreGive(mutexTag);
-    if (!ok) return false;
-  } else return false;
-
-  // Cartucho: presente, dados válidos, vida > 0, não INATIVO, cor com nível > 0
-  if (xSemaphoreTake(mutexTag, pdMS_TO_TICKS(20)) == pdTRUE) {
-    uint8_t rc = ch + 3;
-    bool ok = gTagReaders[rc].presente &&
-              gTagReaders[rc].valid    &&
-              gTagReaders[rc].data.vida   > 0 &&
-              gTagReaders[rc].data.status != TAG_STATUS_INATIVO;
-    if (ok) {
-      TagCor cor = gTagReaders[rc].data.cor;
-      if (cor >= COR_VERMELHO && cor <= COR_AMARELO && gCartLevel[cor] == 0)
-        ok = false;
-    }
+    bool ok = gTagReaders[ch].presente && gTagReaders[ch].valid;
     xSemaphoreGive(mutexTag);
     if (!ok) return false;
   } else return false;
