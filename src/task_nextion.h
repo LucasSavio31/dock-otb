@@ -459,9 +459,11 @@ static void _dockSlot(uint8_t c, bool presente, bool valid, const TagData &d) {
       snprintf(cmd, sizeof(cmd), "vis %s,0", _dsCic[c]); _nextionCmd(cmd);
     }
 
-    // Barra de nivel: nivel virtual do cartucho (gCartLevel).
-    // gNivel mede o nivel da CANETA durante a recarga — nao e usado aqui.
-    uint8_t lvl = (uint8_t)gCartLevel[c + 1];
+    // Barra de nivel: indexa gCartLevel pela cor REAL da tag (não pela posição).
+    // gCartLevel[1]=vermelho [2]=azul [3]=amarelo — mesmo índice do decremento em taskRecarga.
+    uint8_t lvl = 100u;
+    if (valid && d.cor >= COR_VERMELHO && d.cor <= COR_AMARELO)
+      lvl = (uint8_t)gCartLevel[d.cor];
     _setValue(_dsLvl[c], (uint32_t)lvl);
   } else {
     snprintf(cmd, sizeof(cmd), "vis %s,0", _dsLA[c]);  _nextionCmd(cmd);
