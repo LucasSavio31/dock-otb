@@ -3,7 +3,7 @@
 //  shared.h - V5
 //  Tipos, handles globais e estado compartilhado
 // =============================================================
-#define FIRMWARE_VERSION "V1.9.3"
+#define FIRMWARE_VERSION "V1.9.4"
 #include <Arduino.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
@@ -247,6 +247,8 @@ extern SemaphoreHandle_t semI2CScanDone;
 
 // Sinaliza para taskNFC reconfigurar o chip principal apos _menuDiag
 extern volatile bool nfcReinitPending;
+// Sinaliza para taskNFC reiniciar apenas os leitores de caneta (0/1/2) após recarga concluída
+extern volatile bool nfcPenReinitPending;
 
 // Bitmask dos leitores NFC detectados no boot (bit 0 = leitor 0 / D13, bit 1 = D14, etc.)
 extern volatile uint8_t nfcReaderOkMask;

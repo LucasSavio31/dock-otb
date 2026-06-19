@@ -483,6 +483,38 @@ void taskNFC(void *param) {
       Serial.println("[NFC] Reinit apos diagnostico.");
     }
 
+    // ── Reinit leitores de caneta (0/1/2) após recarga concluída ─
+    if (nfcPenReinitPending) {
+      nfcPenReinitPending = false;
+      if (xSemaphoreTake(mutexSPI, pdMS_TO_TICKS(500)) == pdTRUE) {
+        for (uint8_t r = 0; r < 3; r++) {
+          if (!(nfcReaderOkMask & (1 << r))) continue;
+          for (uint8_t i = 0; i < 6; i++) {
+            if (NFC_CS_PINS[i] == LED2) continue;
+            digitalWrite(NFC_CS_PINS[i], HIGH);
+          }
+          nfcReaders[r]->begin();
+          nfcReaders[r]->SAMConfig();
+          vTaskDelay(pdMS_TO_TICKS(10));
+        }
+        _switchReader(_pollReader);
+        xSemaphoreGive(mutexSPI);
+      }
+      // Limpa estado para forçar nova detecção no próximo ciclo de poll
+      if (xSemaphoreTake(mutexTag, pdMS_TO_TICKS(50)) == pdTRUE) {
+        for (uint8_t r = 0; r < 3; r++) {
+          gTagReaders[r].presente = false;
+          gTagReaders[r].valid    = false;
+        }
+        xSemaphoreGive(mutexTag);
+      }
+      for (uint8_t r = 0; r < 3; r++) {
+        _tagPresente[r] = false;
+        _lastUidLen[r]  = 0;
+      }
+      Serial.println("[NFC] Reinit leitores 1/2/3 apos recarga.");
+    }
+
     // ── Comandos da taskSerial ────────────────────────────────
     SerialCmd cmd;
     if (xQueueReceive(qSerialCmd, &cmd, 0) == pdTRUE) {

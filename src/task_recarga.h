@@ -145,8 +145,7 @@ static void _salvarTagCartucho(uint8_t ch) {
                 (unsigned)(ch + 1), d.ciclos, d.vida);
 }
 
-// Verifica se a posição tem sensor I2C lendo + caneta NFC identificada.
-// Cartucho não é requisito para iniciar recarga.
+// Verifica se a posição tem sensor I2C + caneta NFC + cartucho NFC ativos.
 // Preenche *outLevel com o nível atual se retornar true.
 static bool _posicaoApta(uint8_t ch, float *outLevel) {
   // Sensor I2C: deve estar lendo
@@ -159,9 +158,28 @@ static bool _posicaoApta(uint8_t ch, float *outLevel) {
   }
   if (!sensorOk) return false;
 
-  // Caneta: presente e identificada pelo NFC
+  // Caneta: presente, dados válidos, vida > 0, não INATIVO
   if (xSemaphoreTake(mutexTag, pdMS_TO_TICKS(20)) == pdTRUE) {
-    bool ok = gTagReaders[ch].presente && gTagReaders[ch].valid;
+    bool ok = gTagReaders[ch].presente &&
+              gTagReaders[ch].valid    &&
+              gTagReaders[ch].data.vida   > 0 &&
+              gTagReaders[ch].data.status != TAG_STATUS_INATIVO;
+    xSemaphoreGive(mutexTag);
+    if (!ok) return false;
+  } else return false;
+
+  // Cartucho: presente, dados válidos, vida > 0, não INATIVO, cor com nível > 0
+  if (xSemaphoreTake(mutexTag, pdMS_TO_TICKS(20)) == pdTRUE) {
+    uint8_t rc = ch + 3;
+    bool ok = gTagReaders[rc].presente &&
+              gTagReaders[rc].valid    &&
+              gTagReaders[rc].data.vida   > 0 &&
+              gTagReaders[rc].data.status != TAG_STATUS_INATIVO;
+    if (ok) {
+      TagCor cor = gTagReaders[rc].data.cor;
+      if (cor >= COR_VERMELHO && cor <= COR_AMARELO && gCartLevel[cor] == 0)
+        ok = false;
+    }
     xSemaphoreGive(mutexTag);
     if (!ok) return false;
   } else return false;
@@ -348,11 +366,18 @@ void taskRecarga(void *param) {
         if (cor >= COR_VERMELHO && cor <= COR_AMARELO) {
           if (gCartLevel[cor] >= 5) gCartLevel[cor] -= 5;
           else                       gCartLevel[cor]  = 0;
+          // Força refresh imediato de j1/j2/j3 no Nextion
+          { TagEvent ev = {}; ev.type = TagEvent::TAG_PRESENTE;
+            ev.readerIdx = (uint8_t)(ch + 3);
+            xQueueSend(qNextionData, &ev, 0); }
         }
 
         // Grava dados nas tags NFC
         _salvarTagCaneta(ch);
         _salvarTagCartucho(ch);
+
+        // Reinicia leitores de caneta 1/2/3 para nova detecção
+        nfcPenReinitPending = true;
 
         if (xSemaphoreTake(mutexRecharge, pdMS_TO_TICKS(10)) == pdTRUE) {
           gRecharge.status = RechargeInfo::IDLE;
