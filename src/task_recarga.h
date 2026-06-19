@@ -42,7 +42,7 @@ SemaphoreHandle_t mutexRecharge = nullptr;
 #define RECHARGE_DUTY_FILL       85      // duty inicial (%)
 #define RECHARGE_DUTY_TAPER      40      // duty reduzido após 50 % (%)
 #define RECHARGE_STABILIZE_MS    5000    // estabilização antes de checar nível (ms)
-#define RECHARGE_CYCLE_IDLE_MS   15000   // pausa entre varreduras completas (ms)
+#define RECHARGE_CYCLE_IDLE_MS    2000   // pausa entre varreduras completas (ms)
 #define TAG_STATUS_INATIVO       5       // status de tag inativa (vida = 0)
 
 // ── Helpers internos ─────────────────────────────────────────
