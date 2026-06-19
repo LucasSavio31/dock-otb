@@ -459,11 +459,12 @@ static void _dockSlot(uint8_t c, bool presente, bool valid, const TagData &d) {
       snprintf(cmd, sizeof(cmd), "vis %s,0", _dsCic[c]); _nextionCmd(cmd);
     }
 
-    // Barra de nivel: indexa gCartLevel pela cor REAL da tag (não pela posição).
-    // gCartLevel[1]=vermelho [2]=azul [3]=amarelo — mesmo índice do decremento em taskRecarga.
+    // Barra de nivel: 100% - ciclos*5 (5% por recarga, baseado na tag NFC — persiste reboot).
     uint8_t lvl = 100u;
-    if (valid && d.cor >= COR_VERMELHO && d.cor <= COR_AMARELO)
-      lvl = (uint8_t)gCartLevel[d.cor];
+    if (valid) {
+      uint32_t usado = (uint32_t)d.ciclos * 5u;
+      lvl = (usado >= 100u) ? 0u : (uint8_t)(100u - usado);
+    }
     _setValue(_dsLvl[c], (uint32_t)lvl);
   } else {
     snprintf(cmd, sizeof(cmd), "vis %s,0", _dsLA[c]);  _nextionCmd(cmd);
