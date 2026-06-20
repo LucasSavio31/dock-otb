@@ -681,7 +681,7 @@ void taskNFC(void *param) {
     if (r >= 3) {
       uint8_t rfOn[3] = {PN532_COMMAND_RFCONFIGURATION, 0x01, 0x01};
       nfcReaders[r]->sendCommandCheckAck(rfOn, 3, 50);
-      vTaskDelay(pdMS_TO_TICKS(10)); // aguarda campo estabilizar
+      vTaskDelay(pdMS_TO_TICKS(20)); // aguarda campo e tags energizarem
     }
 
     uint8_t uid[7];
@@ -689,18 +689,29 @@ void taskNFC(void *param) {
     bool detectou = _detectarUid(uid, &uidLen, 50);
 
     // Filtro de vínculo para leitores de cartucho (anti-interferência):
-    // • Leitor com vínculo: só aceita a UID vinculada a ele.
-    // • Leitor sem vínculo: rejeita UIDs já vinculadas a outro leitor.
     if (r >= 3 && detectou) {
       uint8_t si = r - 3;
       if (gCartBind[si].uidLen > 0) {
-        // Tem vínculo — rejeita qualquer UID diferente
-        if (uidLen != gCartBind[si].uidLen ||
-            memcmp(uid, gCartBind[si].uid, uidLen) != 0) {
-          detectou = false;
+        // Tem vínculo: verifica se é a tag correta.
+        // Se o anti-colisão selecionou a tag do vizinho, faz ciclos RF para
+        // resetar o estado das duas tags e tenta novamente (até 3x).
+        bool isMyTag = (uidLen == gCartBind[si].uidLen &&
+                        memcmp(uid, gCartBind[si].uid, uidLen) == 0);
+        for (uint8_t retry = 0; retry < 3 && !isMyTag; retry++) {
+          uint8_t rfOff2[3] = {PN532_COMMAND_RFCONFIGURATION, 0x01, 0x00};
+          nfcReaders[r]->sendCommandCheckAck(rfOff2, 3, 20);
+          vTaskDelay(pdMS_TO_TICKS(20)); // tags de-energizam
+          uint8_t rfOn2[3]  = {PN532_COMMAND_RFCONFIGURATION, 0x01, 0x01};
+          nfcReaders[r]->sendCommandCheckAck(rfOn2,  3, 20);
+          vTaskDelay(pdMS_TO_TICKS(15)); // campo estabiliza
+          detectou = _detectarUid(uid, &uidLen, 30);
+          isMyTag  = (detectou &&
+                      uidLen == gCartBind[si].uidLen &&
+                      memcmp(uid, gCartBind[si].uid, uidLen) == 0);
         }
+        if (!isMyTag) detectou = false;
       } else {
-        // Sem vínculo — rejeita UIDs pertencentes a outro leitor
+        // Sem vínculo — rejeita UIDs já pertencentes a outro leitor
         for (uint8_t j = 0; j < 3 && detectou; j++) {
           if (j == si) continue;
           if (gCartBind[j].uidLen == uidLen &&
@@ -768,13 +779,14 @@ void taskNFC(void *param) {
       }
     }
 
-    // Desliga RF do leitor de cartucho antes de avançar para o próximo
+    // Desliga RF do leitor de cartucho e aguarda tags de-energizarem completamente
     if (r >= 3) {
       if (xSemaphoreTake(mutexSPI, pdMS_TO_TICKS(50)) == pdTRUE) {
         uint8_t rfOff[3] = {PN532_COMMAND_RFCONFIGURATION, 0x01, 0x00};
         nfcReaders[r]->sendCommandCheckAck(rfOff, 3, 50);
         xSemaphoreGive(mutexSPI);
       }
+      vTaskDelay(pdMS_TO_TICKS(30)); // tags precisam descarregar antes do próximo leitor
     }
 
     // Avanca round-robin
