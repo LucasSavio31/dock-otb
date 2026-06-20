@@ -47,6 +47,7 @@ volatile bool     gI2CBusy         = false;
 
 TagState         gTag;
 TagReaderState   gTagReaders[6];
+CartBind         gCartBind[3] = {};
 volatile uint8_t  gBombaDuty     = 0;
 volatile uint8_t  gCartLevel[4]  = {100, 100, 100, 100}; // [0] unused; [1-3] = vermelho/azul/amarelo
 volatile uint16_t gRechargeCount = 0;

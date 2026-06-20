@@ -3,7 +3,7 @@
 //  shared.h - V5
 //  Tipos, handles globais e estado compartilhado
 // =============================================================
-#define FIRMWARE_VERSION "V1.9.8"
+#define FIRMWARE_VERSION "V1.9.9"
 #include <Arduino.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
@@ -252,6 +252,12 @@ extern volatile bool nfcPenReinitPending;
 
 // Bitmask dos leitores NFC detectados no boot (bit 0 = leitor 0 / D13, bit 1 = D14, etc.)
 extern volatile uint8_t nfcReaderOkMask;
+
+// Vínculo UID → leitor de cartucho (índice 0/1/2 = leitor 4/5/6).
+// uidLen == 0 significa sem vínculo (aceita qualquer tag).
+// Salvo na NVS namespace "cartbind"; carregado no boot de taskNFC.
+struct CartBind { uint8_t uid[7]; uint8_t uidLen; };
+extern CartBind gCartBind[3];
 
 // =========================
 // ESTADO COMPARTILHADO (protegido por mutexTag)

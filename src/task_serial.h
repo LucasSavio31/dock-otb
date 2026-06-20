@@ -163,6 +163,16 @@ static void _menuNFC(bool isCaneta) {
   Serial.println("  l → Ler dados");
   Serial.println("  g → Gravar dados");
   Serial.println("  r → Resetar");
+  if (!isCaneta) {
+    uint8_t si = (uint8_t)idx;
+    if (gCartBind[si].uidLen > 0) {
+      Serial.print("  u → Desvincular UID (atual:");
+      for (uint8_t b = 0; b < gCartBind[si].uidLen; b++) Serial.printf(" %02X", gCartBind[si].uid[b]);
+      Serial.println(")");
+    } else {
+      Serial.println("  [sem vinculo — aceita qualquer tag]");
+    }
+  }
   Serial.print("> ");
 
   String acao = _lerLinhaSemTag(10000);
@@ -225,6 +235,20 @@ static void _menuNFC(bool isCaneta) {
       if (ev.type == TagEvent::TAG_RESETADA) { Serial.println("Resetada:"); _mostrarDados(ev.data); }
       else Serial.println("Falha ao resetar.");
     } else Serial.println("Timeout.");
+  }
+  else if (acao == "u" && !isCaneta) {
+    uint8_t si = (uint8_t)(readerIdx - 3);
+    gCartBind[si].uidLen = 0;
+    Preferences prefs;
+    if (xSemaphoreTake(mutexNVS, pdMS_TO_TICKS(500)) == pdTRUE) {
+      prefs.begin("cartbind", false);
+      char key[8];
+      snprintf(key, sizeof(key), "ulen%u", si);
+      prefs.putUChar(key, 0);
+      prefs.end();
+      xSemaphoreGive(mutexNVS);
+    }
+    Serial.printf("Leitor %u desvinculado — aceita qualquer tag.\n", readerIdx + 1);
   }
   else { Serial.println("Acao invalida."); }
 }

@@ -11,6 +11,7 @@
 #include <SPI.h>
 #include <Wire.h>
 #include <Adafruit_PN532.h>
+#include <Preferences.h>
 
 #define NFC_SCK   18
 #define NFC_MISO  19
@@ -417,6 +418,29 @@ void taskNFC(void *param) {
 
   Serial.printf("[NFC] Pronto. Leitores OK: %d/6\n", __builtin_popcount(okMask));
 
+  // Carrega vínculos UID → leitor de cartucho salvos na NVS
+  {
+    Preferences prefs;
+    if (xSemaphoreTake(mutexNVS, pdMS_TO_TICKS(500)) == pdTRUE) {
+      prefs.begin("cartbind", true);
+      for (uint8_t i = 0; i < 3; i++) {
+        char key[8];
+        snprintf(key, sizeof(key), "ulen%u", i);
+        uint8_t len = prefs.getUChar(key, 0);
+        if (len > 0 && len <= 7) {
+          snprintf(key, sizeof(key), "uid%u", i);
+          prefs.getBytes(key, gCartBind[i].uid, len);
+          gCartBind[i].uidLen = len;
+          Serial.printf("[NFC] Leitor %u vinculo:", i + 4);
+          for (uint8_t b = 0; b < len; b++) Serial.printf(" %02X", gCartBind[i].uid[b]);
+          Serial.println();
+        }
+      }
+      prefs.end();
+      xSemaphoreGive(mutexNVS);
+    }
+  }
+
   uint32_t ultimoPollMs = 0;
 
   for (;;) {
@@ -566,6 +590,27 @@ void taskNFC(void *param) {
                 xSemaphoreGive(mutexSPI);
                 _publicarEvento(TagEvent::TAG_GRAVADA, relido ? &lido : &cmd.payload, uid, uidLen, cmd.readerIdx);
                 xTaskNotify(hTaskLED, 2, eSetValueWithOverwrite);
+                // Cartucho gravado: vincula esta UID ao leitor e persiste na NVS
+                if (cmd.readerIdx >= 3) {
+                  uint8_t si = cmd.readerIdx - 3;
+                  gCartBind[si].uidLen = 0;              // limpa antes de copiar
+                  memcpy(gCartBind[si].uid, uid, uidLen);
+                  gCartBind[si].uidLen = uidLen;
+                  Preferences prefs;
+                  if (xSemaphoreTake(mutexNVS, pdMS_TO_TICKS(500)) == pdTRUE) {
+                    prefs.begin("cartbind", false);
+                    char key[8];
+                    snprintf(key, sizeof(key), "uid%u", si);
+                    prefs.putBytes(key, uid, uidLen);
+                    snprintf(key, sizeof(key), "ulen%u", si);
+                    prefs.putUChar(key, uidLen);
+                    prefs.end();
+                    xSemaphoreGive(mutexNVS);
+                  }
+                  Serial.printf("[NFC] Leitor %u vinculado a UID:", cmd.readerIdx + 1);
+                  for (uint8_t i = 0; i < uidLen; i++) Serial.printf(" %02X", uid[i]);
+                  Serial.println();
+                }
               } else {
                 erroSetar(ERR_E111);
                 xSemaphoreGive(mutexSPI);
@@ -642,6 +687,14 @@ void taskNFC(void *param) {
     uint8_t uid[7];
     uint8_t uidLen = 0;
     bool detectou = _detectarUid(uid, &uidLen, 50);
+
+    // Leitor de cartucho com vínculo: ignora UIDs que não correspondem (anti-interferência)
+    if (r >= 3 && detectou && gCartBind[r - 3].uidLen > 0) {
+      if (uidLen != gCartBind[r - 3].uidLen ||
+          memcmp(uid, gCartBind[r - 3].uid, uidLen) != 0) {
+        detectou = false;
+      }
+    }
 
     if (detectou) {
       _ultDetectMs[r] = now;
