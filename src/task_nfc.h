@@ -688,11 +688,26 @@ void taskNFC(void *param) {
     uint8_t uidLen = 0;
     bool detectou = _detectarUid(uid, &uidLen, 50);
 
-    // Leitor de cartucho com vínculo: ignora UIDs que não correspondem (anti-interferência)
-    if (r >= 3 && detectou && gCartBind[r - 3].uidLen > 0) {
-      if (uidLen != gCartBind[r - 3].uidLen ||
-          memcmp(uid, gCartBind[r - 3].uid, uidLen) != 0) {
-        detectou = false;
+    // Filtro de vínculo para leitores de cartucho (anti-interferência):
+    // • Leitor com vínculo: só aceita a UID vinculada a ele.
+    // • Leitor sem vínculo: rejeita UIDs já vinculadas a outro leitor.
+    if (r >= 3 && detectou) {
+      uint8_t si = r - 3;
+      if (gCartBind[si].uidLen > 0) {
+        // Tem vínculo — rejeita qualquer UID diferente
+        if (uidLen != gCartBind[si].uidLen ||
+            memcmp(uid, gCartBind[si].uid, uidLen) != 0) {
+          detectou = false;
+        }
+      } else {
+        // Sem vínculo — rejeita UIDs pertencentes a outro leitor
+        for (uint8_t j = 0; j < 3 && detectou; j++) {
+          if (j == si) continue;
+          if (gCartBind[j].uidLen == uidLen &&
+              memcmp(uid, gCartBind[j].uid, uidLen) == 0) {
+            detectou = false;
+          }
+        }
       }
     }
 
