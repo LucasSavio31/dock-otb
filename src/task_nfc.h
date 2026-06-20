@@ -684,39 +684,25 @@ void taskNFC(void *param) {
 
     uint8_t uid[7];
     uint8_t uidLen = 0;
-    bool detectou = _detectarUid(uid, &uidLen, 50);
+    bool detectou;
 
-    // Filtro de vínculo para leitores de cartucho (anti-interferência):
-    if (r >= 3 && detectou) {
+    if (r >= 3) {
       uint8_t si = r - 3;
       if (gCartBind[si].uidLen > 0) {
-        bool isMyTag = (uidLen == gCartBind[si].uidLen &&
-                        memcmp(uid, gCartBind[si].uid, uidLen) == 0);
-        // Rastreia se detectamos alguma tag (mesmo que errada) — indica interferência
-        bool interferencia = !isMyTag;
-        // Com 3 tags a 5 cm, anti-colisão ISO 14443A acerta ~33% por tentativa.
-        // 8 retries → P(acertar) ≈ 96%. Ciclos RF forçam re-arbitração.
-        for (uint8_t retry = 0; retry < 8 && !isMyTag; retry++) {
-          uint8_t rfOff2[3] = {PN532_COMMAND_RFCONFIGURATION, 0x01, 0x00};
-          nfcReaders[r]->sendCommandCheckAck(rfOff2, 3, 20);
-          vTaskDelay(pdMS_TO_TICKS(25)); // tags de-energizam
-          uint8_t rfOn2[3]  = {PN532_COMMAND_RFCONFIGURATION, 0x01, 0x01};
-          nfcReaders[r]->sendCommandCheckAck(rfOn2,  3, 20);
-          vTaskDelay(pdMS_TO_TICKS(15)); // campo estabiliza
-          detectou = _detectarUid(uid, &uidLen, 30);
-          if (detectou) interferencia = true;
-          isMyTag  = (detectou &&
-                      uidLen == gCartBind[si].uidLen &&
-                      memcmp(uid, gCartBind[si].uid, uidLen) == 0);
-        }
-        if (!isMyTag) {
-          // Interferência ativa: mantém timestamp para não gerar TAG_REMOVIDA falso
-          if (interferencia && _tagPresente[r])
-            _ultDetectMs[r] = now;
-          detectou = false;
-        }
+        // Anti-colisão dirigida: PN532 usa o UID como InitiatorData (UM10232 §7.3.5).
+        // Mesmo que todas as tags vizinhas respondam ao REQA, o chip só completa
+        // o SELECT para a tag com esse UID — as demais permanecem inativas.
+        uint8_t cmd[10] = {
+          PN532_COMMAND_INLISTPASSIVETARGET, 0x01, PN532_MIFARE_ISO14443A,
+          gCartBind[si].uid[0], gCartBind[si].uid[1], gCartBind[si].uid[2],
+          gCartBind[si].uid[3], gCartBind[si].uid[4], gCartBind[si].uid[5],
+          gCartBind[si].uid[6],
+        };
+        bool sent = nfcReaders[r]->sendCommandCheckAck(cmd, 3 + gCartBind[si].uidLen, 80);
+        detectou = sent && nfcReaders[r]->readDetectedPassiveTargetID(uid, &uidLen);
       } else {
-        // Sem vínculo — rejeita UIDs já pertencentes a outro leitor
+        // Sem vínculo: detecção normal + rejeita UIDs de outros leitores
+        detectou = _detectarUid(uid, &uidLen, 50);
         for (uint8_t j = 0; j < 3 && detectou; j++) {
           if (j == si) continue;
           if (gCartBind[j].uidLen == uidLen &&
@@ -725,6 +711,8 @@ void taskNFC(void *param) {
           }
         }
       }
+    } else {
+      detectou = _detectarUid(uid, &uidLen, 50);
     }
 
     if (detectou) {

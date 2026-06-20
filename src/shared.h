@@ -3,7 +3,7 @@
 //  shared.h - V5
 //  Tipos, handles globais e estado compartilhado
 // =============================================================
-#define FIRMWARE_VERSION "V2.0.3"
+#define FIRMWARE_VERSION "V2.0.4"
 #include <Arduino.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
