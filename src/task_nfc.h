@@ -18,6 +18,16 @@
 #define NFC_MOSI  23
 #define NFC_CS    13
 
+// UIDs fixas por leitor de cartucho — hardcoded no firmware.
+// Índice 0 = NFC4 (D5), 1 = NFC5 (D15), 2 = NFC6 (D32).
+// Cada leitor só aceita a UID correspondente; qualquer outra é ignorada.
+static const uint8_t CART_BIND_UID[3][7] = {
+  {0x53, 0x12, 0xF6, 0x5B, 0x22, 0x00, 0x01},  // NFC4 D5
+  {0x53, 0x2E, 0xF9, 0x5B, 0x22, 0x00, 0x01},  // NFC5 D15
+  {0x53, 0x74, 0x00, 0x5C, 0x22, 0x00, 0x01},  // NFC6 D32
+};
+static const uint8_t CART_BIND_UID_LEN = 7;
+
 // Mapeamento dos 6 leitores (indices 0-5)
 static const uint8_t NFC_CS_PINS[6] = {13, 14, 4, 5, 15, 32};
 static const char*   NFC_NOMES[6]   = {
@@ -418,27 +428,15 @@ void taskNFC(void *param) {
 
   Serial.printf("[NFC] Pronto. Leitores OK: %d/6\n", __builtin_popcount(okMask));
 
-  // Carrega vínculos UID → leitor de cartucho salvos na NVS
-  {
-    Preferences prefs;
-    if (xSemaphoreTake(mutexNVS, pdMS_TO_TICKS(500)) == pdTRUE) {
-      prefs.begin("cartbind", true);
-      for (uint8_t i = 0; i < 3; i++) {
-        char key[8];
-        snprintf(key, sizeof(key), "ulen%u", i);
-        uint8_t len = prefs.getUChar(key, 0);
-        if (len > 0 && len <= 7) {
-          snprintf(key, sizeof(key), "uid%u", i);
-          prefs.getBytes(key, gCartBind[i].uid, len);
-          gCartBind[i].uidLen = len;
-          Serial.printf("[NFC] Leitor %u vinculo:", i + 4);
-          for (uint8_t b = 0; b < len; b++) Serial.printf(" %02X", gCartBind[i].uid[b]);
-          Serial.println();
-        }
-      }
-      prefs.end();
-      xSemaphoreGive(mutexNVS);
-    }
+  // Aplica vínculos fixos de firmware para leitores de cartucho (NFC4/5/6).
+  // Precedência sobre NVS: garante que somente a tag correta é aceita em cada leitor.
+  for (uint8_t i = 0; i < 3; i++) {
+    memcpy(gCartBind[i].uid, CART_BIND_UID[i], CART_BIND_UID_LEN);
+    gCartBind[i].uidLen = CART_BIND_UID_LEN;
+    Serial.printf("[NFC] Leitor %u vinculo fixo:", i + 4);
+    for (uint8_t b = 0; b < CART_BIND_UID_LEN; b++)
+      Serial.printf(" %02X", CART_BIND_UID[i][b]);
+    Serial.println();
   }
 
   uint32_t ultimoPollMs = 0;
