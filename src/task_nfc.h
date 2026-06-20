@@ -631,6 +631,14 @@ void taskNFC(void *param) {
 
     _switchReader(r);
 
+    // Leitores de cartucho (4/5/6, r>=3) ficam a ~5 cm um do outro.
+    // Liga RF apenas durante o poll para evitar que campos vizinhos se sobreponham.
+    if (r >= 3) {
+      uint8_t rfOn[3] = {PN532_COMMAND_RFCONFIGURATION, 0x01, 0x01};
+      nfcReaders[r]->sendCommandCheckAck(rfOn, 3, 50);
+      vTaskDelay(pdMS_TO_TICKS(10)); // aguarda campo estabilizar
+    }
+
     uint8_t uid[7];
     uint8_t uidLen = 0;
     bool detectou = _detectarUid(uid, &uidLen, 50);
@@ -689,6 +697,15 @@ void taskNFC(void *param) {
 
         _publicarEvento(TagEvent::TAG_REMOVIDA, nullptr, nullptr, 0, r);
         Serial.printf("[NFC] Tag removida do leitor %u.\n", r + 1);
+      }
+    }
+
+    // Desliga RF do leitor de cartucho antes de avançar para o próximo
+    if (r >= 3) {
+      if (xSemaphoreTake(mutexSPI, pdMS_TO_TICKS(50)) == pdTRUE) {
+        uint8_t rfOff[3] = {PN532_COMMAND_RFCONFIGURATION, 0x01, 0x00};
+        nfcReaders[r]->sendCommandCheckAck(rfOff, 3, 50);
+        xSemaphoreGive(mutexSPI);
       }
     }
 
