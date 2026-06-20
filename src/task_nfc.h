@@ -679,7 +679,7 @@ void taskNFC(void *param) {
     if (r >= 3) {
       uint8_t rfOn[3] = {PN532_COMMAND_RFCONFIGURATION, 0x01, 0x01};
       nfcReaders[r]->sendCommandCheckAck(rfOn, 3, 50);
-      vTaskDelay(pdMS_TO_TICKS(20)); // aguarda campo e tags energizarem
+      vTaskDelay(pdMS_TO_TICKS(25)); // aguarda campo e tags energizarem
     }
 
     uint8_t uid[7];
@@ -690,24 +690,31 @@ void taskNFC(void *param) {
     if (r >= 3 && detectou) {
       uint8_t si = r - 3;
       if (gCartBind[si].uidLen > 0) {
-        // Tem vínculo: verifica se é a tag correta.
-        // Se o anti-colisão selecionou a tag do vizinho, faz ciclos RF para
-        // resetar o estado das duas tags e tenta novamente (até 3x).
         bool isMyTag = (uidLen == gCartBind[si].uidLen &&
                         memcmp(uid, gCartBind[si].uid, uidLen) == 0);
-        for (uint8_t retry = 0; retry < 3 && !isMyTag; retry++) {
+        // Rastreia se detectamos alguma tag (mesmo que errada) — indica interferência
+        bool interferencia = !isMyTag;
+        // Com 3 tags a 5 cm, anti-colisão ISO 14443A acerta ~33% por tentativa.
+        // 8 retries → P(acertar) ≈ 96%. Ciclos RF forçam re-arbitração.
+        for (uint8_t retry = 0; retry < 8 && !isMyTag; retry++) {
           uint8_t rfOff2[3] = {PN532_COMMAND_RFCONFIGURATION, 0x01, 0x00};
           nfcReaders[r]->sendCommandCheckAck(rfOff2, 3, 20);
-          vTaskDelay(pdMS_TO_TICKS(20)); // tags de-energizam
+          vTaskDelay(pdMS_TO_TICKS(25)); // tags de-energizam
           uint8_t rfOn2[3]  = {PN532_COMMAND_RFCONFIGURATION, 0x01, 0x01};
           nfcReaders[r]->sendCommandCheckAck(rfOn2,  3, 20);
           vTaskDelay(pdMS_TO_TICKS(15)); // campo estabiliza
           detectou = _detectarUid(uid, &uidLen, 30);
+          if (detectou) interferencia = true;
           isMyTag  = (detectou &&
                       uidLen == gCartBind[si].uidLen &&
                       memcmp(uid, gCartBind[si].uid, uidLen) == 0);
         }
-        if (!isMyTag) detectou = false;
+        if (!isMyTag) {
+          // Interferência ativa: mantém timestamp para não gerar TAG_REMOVIDA falso
+          if (interferencia && _tagPresente[r])
+            _ultDetectMs[r] = now;
+          detectou = false;
+        }
       } else {
         // Sem vínculo — rejeita UIDs já pertencentes a outro leitor
         for (uint8_t j = 0; j < 3 && detectou; j++) {
@@ -784,7 +791,7 @@ void taskNFC(void *param) {
         nfcReaders[r]->sendCommandCheckAck(rfOff, 3, 50);
         xSemaphoreGive(mutexSPI);
       }
-      vTaskDelay(pdMS_TO_TICKS(30)); // tags precisam descarregar antes do próximo leitor
+      vTaskDelay(pdMS_TO_TICKS(80)); // 80 ms garante de-energização das 3 tags vizinhas
     }
 
     // Avanca round-robin
