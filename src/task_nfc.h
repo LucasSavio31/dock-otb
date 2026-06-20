@@ -689,17 +689,24 @@ void taskNFC(void *param) {
     if (r >= 3) {
       uint8_t si = r - 3;
       if (gCartBind[si].uidLen > 0) {
-        // Anti-colisão dirigida: PN532 usa o UID como InitiatorData (UM10232 §7.3.5).
-        // Mesmo que todas as tags vizinhas respondam ao REQA, o chip só completa
-        // o SELECT para a tag com esse UID — as demais permanecem inativas.
-        uint8_t cmd[10] = {
-          PN532_COMMAND_INLISTPASSIVETARGET, 0x01, PN532_MIFARE_ISO14443A,
-          gCartBind[si].uid[0], gCartBind[si].uid[1], gCartBind[si].uid[2],
-          gCartBind[si].uid[3], gCartBind[si].uid[4], gCartBind[si].uid[5],
-          gCartBind[si].uid[6],
-        };
-        bool sent = nfcReaders[r]->sendCommandCheckAck(cmd, 3 + gCartBind[si].uidLen, 80);
-        detectou = sent && nfcReaders[r]->readDetectedPassiveTargetID(uid, &uidLen);
+        // Isolação por HALT: se anti-colisão selecionar tag errada, manda HALT
+        // (ISO14443A cmd 0x50) para silenciá-la — ela deixa de responder a REQA.
+        // Próxima tentativa tem uma tag a menos. Com 3 tags, 3 tentativas garantem
+        // encontrar a tag correta ou confirmar ausência. Sem depender de sorte.
+        detectou = false;
+        for (uint8_t attempt = 0; attempt < 3 && !detectou; attempt++) {
+          if (!_detectarUid(uid, &uidLen, 60)) break;
+          if (uidLen == gCartBind[si].uidLen &&
+              memcmp(uid, gCartBind[si].uid, uidLen) == 0) {
+            detectou = true;
+          } else {
+            uint8_t haltCmd[2] = {0x50, 0x00};
+            uint8_t haltResp[2];
+            uint8_t haltRespLen = sizeof(haltResp);
+            nfcReaders[r]->inDataExchange(haltCmd, 2, haltResp, &haltRespLen);
+            vTaskDelay(pdMS_TO_TICKS(5));
+          }
+        }
       } else {
         // Sem vínculo: detecção normal + rejeita UIDs de outros leitores
         detectou = _detectarUid(uid, &uidLen, 50);
