@@ -698,17 +698,20 @@ void taskNextion(void *param) {
         ri = gRecharge;
         xSemaphoreGive(mutexRecharge);
       }
-      bool rechargeAtivo = (ri.status == RechargeInfo::RUNNING ||
-                            ri.status == RechargeInfo::TAPERING);
+      bool rechargeAtivo = (ri.status == RechargeInfo::RUNNING  ||
+                            ri.status == RechargeInfo::TAPERING ||
+                            ri.status == RechargeInfo::DETECTING);
 
       if (rechargeAtivo && !_rechargeAtivo) {
-        // Recarga iniciou → navega para tela 7 e preenche campos
+        // Caneta detectada (ou recarga iniciando) → navega para tela 7
         _nextionCmd("page 7");
         vTaskDelay(pdMS_TO_TICKS(150));
         _preencherAnamRec(ri);
       } else if (!rechargeAtivo && _rechargeAtivo) {
-        // Recarga terminou → volta para dock_status
-        vTaskDelay(pdMS_TO_TICKS(1500));
+        // Recarga terminou — ABORTED: retorno imediato; outros: 1.5 s
+        if (ri.status != RechargeInfo::ABORTED) {
+          vTaskDelay(pdMS_TO_TICKS(1500));
+        }
         _nextionCmd("page 1");
         vTaskDelay(pdMS_TO_TICKS(200));
         _nextionCmd("sendme");

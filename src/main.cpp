@@ -42,6 +42,7 @@ SemaphoreHandle_t semI2CScanDone = nullptr;
 volatile bool     nfcReinitPending    = false;
 volatile bool     nfcPenReinitPending = false;
 volatile bool     gBloqueado       = false;
+volatile OpMode   gOpMode          = OP_STANDALONE;
 volatile uint8_t  nfcReaderOkMask  = 0;
 volatile bool     gI2CBusy         = false;
 

@@ -1017,8 +1017,41 @@ static void _menuOta(const String& args) {
   Serial.println("Uso: ota [status|check|update|rollback|scan|wifi <ssid> [senha]]");
 }
 
+static void _menuOpMode(const String& arg) {
+  if (arg.length() == 0) {
+    Serial.printf("OP_MODE:%s\n", gOpMode == OP_MANUAL ? "manual" : "standalone");
+    return;
+  }
+  OpMode newMode;
+  if (arg == "standalone")  newMode = OP_STANDALONE;
+  else if (arg == "manual") newMode = OP_MANUAL;
+  else { Serial.println("Uso: opmode [standalone|manual]"); return; }
+  if (mutexNVS && xSemaphoreTake(mutexNVS, pdMS_TO_TICKS(300)) == pdTRUE) {
+    Preferences prefs;
+    if (prefs.begin("otb-dock", false)) {
+      prefs.putUChar("op_mode", (uint8_t)newMode);
+      prefs.end();
+    }
+    xSemaphoreGive(mutexNVS);
+  }
+  gOpMode = newMode;
+  Serial.printf("OP_MODE:%s\n", gOpMode == OP_MANUAL ? "manual" : "standalone");
+}
+
 void taskSerial(void *param) {
   vTaskDelay(pdMS_TO_TICKS(3500)); // aguarda todas as tasks iniciarem
+
+  // Carrega modo de operação da NVS
+  if (mutexNVS && xSemaphoreTake(mutexNVS, pdMS_TO_TICKS(300)) == pdTRUE) {
+    Preferences prefs;
+    if (prefs.begin("otb-dock", true)) {
+      gOpMode = (OpMode)prefs.getUChar("op_mode", (uint8_t)OP_STANDALONE);
+      prefs.end();
+    }
+    xSemaphoreGive(mutexNVS);
+  }
+  Serial.printf("OP_MODE:%s\n", gOpMode == OP_MANUAL ? "manual" : "standalone");
+
   Serial.println("[Serial] OTB DockStation V5 — pronto.");
   _mostrarMenuPrincipal();
 
@@ -1081,6 +1114,11 @@ void taskSerial(void *param) {
           Serial.printf("Iniciando recarga caneta %d...\n", ch + 1);
         } else { Serial.println("Uso: recharge 1|2|3|stop|read 1|2|3"); }
       }
+    }
+    else if (op == "opmode" || op.startsWith("opmode ")) {
+      String arg = op.length() > 7 ? op.substring(7) : "";
+      arg.trim();
+      _menuOpMode(arg);
     }
     else if (op == "lock") {
       Serial.println(gBloqueado ? "DOCK_BLOCKED" : "DOCK_OK");

@@ -2844,6 +2844,7 @@ async function doConnectPort(port, btn) {
     historyAddEntry({ type: 'Comunicação', origin: 'Dashboard', description: 'Dashboard conectado à dock.', severity: 'success', status: 'Conectado' });
     await delay(1000);
     refreshOverview();
+    sendCmd('opmode', 0); // sincroniza modo de operação com o ESP32
     // Pede status OTA em 3 momentos distintos: cobre boot rápido, WiFi lento e sessões longas
     setTimeout(otaRefreshStatus, 3000);
     setTimeout(otaRefreshStatus, 9000);
@@ -2957,6 +2958,7 @@ async function startReading() {
         else if (line === 'DOCK_OK')                       dockHandleNormal();
         else if (line === 'UNLOCK_OK')                     dockHandleUnlockOk();
         else if (line.startsWith('UNLOCK_ERR:'))           dockHandleUnlockErr(line.substring(11));
+        else if (line.startsWith('OP_MODE:'))              opModeHandleEsp(line.substring(8));
       }
     }
   } catch(_) {}
@@ -4793,6 +4795,7 @@ function opModeChange(val) {
   localStorage.setItem('otb_op_mode', val);
   _opModeApply(val);
   _rechargeUpdateButtons();
+  if (serial.connected) sendCmd('opmode ' + (val === 'off' ? 'standalone' : val), 0);
 }
 
 function _opModeApply(mode) {
@@ -4807,6 +4810,19 @@ function _opModeApply(mode) {
 }
 
 function _opModeGet() { return recharge.opMode || 'off'; }
+
+function opModeHandleEsp(mode) {
+  // mode = 'standalone' | 'manual' (vindo do ESP32)
+  // Se o dashboard está em 'off', mantém; senão sincroniza com o ESP32
+  const current = _opModeGet();
+  if (current === 'off') return; // usuário optou por desabilitar, não sobrescreve
+  const m = (mode === 'manual') ? 'manual' : 'standalone';
+  localStorage.setItem('otb_op_mode', m);
+  const radio = document.querySelector(`input[name="opMode"][value="${m}"]`);
+  if (radio) radio.checked = true;
+  _opModeApply(m);
+  _rechargeUpdateButtons();
+}
 
 // ── Simulação local (modo manual sem serial) ──────────────────────────────────
 function _simStart(pen) {

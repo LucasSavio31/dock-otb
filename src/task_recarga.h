@@ -191,16 +191,26 @@ static bool _posicaoApta(uint8_t ch, float *outLevel) {
 // ── Task ──────────────────────────────────────────────────────
 void taskRecarga(void *param) {
   vTaskDelay(pdMS_TO_TICKS(8000));
-  Serial.println("[Recarga] Ciclo autonomo iniciado.");
+  Serial.println("[Recarga] Ciclo iniciado.");
 
   for (;;) {
-    // Drena fila antes de cada varredura (descarta comandos pendentes)
-    { RechargeCmd c; while (xQueueReceive(qRechargeCmd, &c, 0) == pdTRUE) {} }
-
     if (gBloqueado) { vTaskDelay(pdMS_TO_TICKS(1000)); continue; }
 
-    // ── Varredura posições 1 → 2 → 3 ─────────────────────────
-    for (uint8_t ch = 0; ch < 3; ch++) {
+    // ── Modo manual: aguarda START do serial/dashboard ─────────
+    uint8_t chStart = 0, chEnd = 3;
+    if (gOpMode == OP_MANUAL) {
+      RechargeCmd cmd;
+      if (xQueueReceive(qRechargeCmd, &cmd, pdMS_TO_TICKS(200)) != pdTRUE) continue;
+      if (cmd.type != RechargeCmd::START || cmd.channel > 2) continue;
+      chStart = cmd.channel;
+      chEnd   = cmd.channel + 1;
+    } else {
+      // Standalone: drena STARTs pendentes (firmware controla)
+      { RechargeCmd c; while (xQueueReceive(qRechargeCmd, &c, 0) == pdTRUE) {} }
+    }
+
+    // ── Varredura posições ─────────────────────────────────────
+    for (uint8_t ch = chStart; ch < chEnd; ch++) {
 
       // ── 1. Detecção: sensor I2C + caneta NFC ─────────────
       float levelPct = 0.0f;
@@ -211,6 +221,14 @@ void taskRecarga(void *param) {
 
       // ── 2. Estabilização 5 s ──────────────────────────────
       Serial.printf("RECHARGE_STATUS:%d,%.1f,0,DETECTING\n", ch, levelPct);
+      // Atualiza gRecharge para DETECTING — nextion navega para tela 7 imediatamente
+      if (xSemaphoreTake(mutexRecharge, pdMS_TO_TICKS(10)) == pdTRUE) {
+        gRecharge = {};
+        gRecharge.status   = RechargeInfo::DETECTING;
+        gRecharge.channel  = ch;
+        gRecharge.levelPct = levelPct;
+        xSemaphoreGive(mutexRecharge);
+      }
       bool stable = true;
       for (uint32_t t = 0; t < RECHARGE_STABILIZE_MS && stable; t += 500) {
         vTaskDelay(pdMS_TO_TICKS(500));
@@ -287,19 +305,25 @@ void taskRecarga(void *param) {
       // ── Malha de controle ────────────────────────────────
       while (state == RechargeInfo::RUNNING || state == RechargeInfo::TAPERING) {
 
-        // Abort por STOP
-        { RechargeCmd sc;
+        // Abort por STOP: verifica a cada 100 ms para resposta quase imediata
+        bool aborted = false;
+        for (uint8_t tick = 0; tick < 5 && !aborted; tick++) {
+          vTaskDelay(pdMS_TO_TICKS(100));
+          RechargeCmd sc;
           if (xQueueReceive(qRechargeCmd, &sc, 0) == pdTRUE && sc.type == RechargeCmd::STOP) {
             _rechargeAbort(ch);
-            state = RechargeInfo::IDLE;
+            state = RechargeInfo::ABORTED;
+            if (xSemaphoreTake(mutexRecharge, pdMS_TO_TICKS(10)) == pdTRUE) {
+              gRecharge.status = RechargeInfo::ABORTED;
+              xSemaphoreGive(mutexRecharge);
+            }
             Serial.printf("RECHARGE_STATUS:%d,%.1f,0,ABORTED\n", ch, levelPct);
             logdbPublishf("Recarga", "Abortada", LOG_WARN,
                           "Pos=%u abortada por comando.", (unsigned)(ch + 1));
-            break;
+            aborted = true;
           }
         }
-
-        vTaskDelay(pdMS_TO_TICKS(500));
+        if (aborted) break;
 
         uint32_t elapsed = millis() - startMs;
 
@@ -408,7 +432,8 @@ void taskRecarga(void *param) {
       vTaskDelay(pdMS_TO_TICKS(500)); // pausa curta entre posições sem recarga
     }
 
-    // Aguarda antes da próxima varredura completa
-    vTaskDelay(pdMS_TO_TICKS(RECHARGE_CYCLE_IDLE_MS));
+    if (gOpMode != OP_MANUAL) {
+      vTaskDelay(pdMS_TO_TICKS(RECHARGE_CYCLE_IDLE_MS));
+    }
   }
 }

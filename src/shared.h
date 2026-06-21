@@ -3,7 +3,7 @@
 //  shared.h - V5
 //  Tipos, handles globais e estado compartilhado
 // =============================================================
-#define FIRMWARE_VERSION "V2.1.0"
+#define FIRMWARE_VERSION "V2.2.0"
 #include <Arduino.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
@@ -125,7 +125,7 @@ struct RechargeCmd {
 #define NEXTION_PAGE_ANAM_REC  7
 
 struct RechargeInfo {
-  enum Status : uint8_t { IDLE, RUNNING, TAPERING, DONE, TIMEOUT, SATURATED, SENSOR_ERR } status;
+  enum Status : uint8_t { IDLE, RUNNING, TAPERING, DONE, TIMEOUT, SATURATED, SENSOR_ERR, DETECTING, ABORTED } status;
   uint8_t  channel;
   float    levelPct;
   uint8_t  dutyPct;
@@ -302,6 +302,12 @@ extern volatile uint8_t gBombaDuty;
 // Flag de bloqueio por violação física — persiste via NVS entre reinicializações
 // Setado por taskViolacao; limpo por comando "unlock 1234" + esp_restart()
 extern volatile bool gBloqueado;
+
+// Modo de operação — persiste na NVS (namespace "otb-dock", chave "op_mode")
+// OP_STANDALONE: firmware detecta caneta+cartucho e inicia recarga automático
+// OP_MANUAL:     aguarda comando 'recharge N' pelo serial antes de iniciar
+enum OpMode : uint8_t { OP_STANDALONE = 0, OP_MANUAL = 1 };
+extern volatile OpMode gOpMode;
 
 // Nível virtual dos cartuchos 0-100% por cor (não persistente; -5% por recarga)
 // Índice = TagCor (1=vermelho, 2=azul, 3=amarelo), índice 0 não usado
