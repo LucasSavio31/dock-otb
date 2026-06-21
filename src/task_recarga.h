@@ -393,9 +393,13 @@ void taskRecarga(void *param) {
           }
         }
 
-        // Atualiza global
+        // Atualiza global — preserva penId/cartId/serial preenchidos no início do RUNNING
         if (xSemaphoreTake(mutexRecharge, pdMS_TO_TICKS(10)) == pdTRUE) {
-          gRecharge = { state, ch, levelPct, duty, elapsed };
+          gRecharge.status    = state;
+          gRecharge.channel   = ch;
+          gRecharge.levelPct  = levelPct;
+          gRecharge.dutyPct   = duty;
+          gRecharge.elapsedMs = elapsed;
           xSemaphoreGive(mutexRecharge);
         }
 

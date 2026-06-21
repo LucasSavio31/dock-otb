@@ -561,14 +561,17 @@ static void _processarTouch(uint8_t page, uint8_t compID, uint8_t event) {
   if (event != 0x01) return;
 
   // ── Pagina anam_rec (tela 7): botão m0 (ID=4) = PARADA DE EMERGÊNCIA ────
+  // Nextion: no Touch Press Event do m0, adicione:
+  //   printh 65 07 04 01 FF FF FF
+  // Isso envia o pacote binário explicitamente ao pressionar.
   if (page == NEXTION_PAGE_ANAM_REC) {
     if (compID != 4) return; // ignora outros toques na tela 7
     RechargeCmd sc{};
     sc.type = RechargeCmd::STOP;
-    xQueueSend(qRechargeCmd, &sc, 0);
+    xQueueSend(qRechargeCmd, &sc, 0); // STOP imediato — taskRecarga aborta em <100ms
     Serial.println("[Nextion] EMERGENCIA: recarga interrompida via m0 (ID=4)");
     logdbPublishf("Nextion", "Emergencia", LOG_WARN, "Parada emergencia m0 p7");
-    // Aguarda 2s e retorna à tela inicial
+    // Aguarda 2s para feedback visual antes de retornar
     vTaskDelay(pdMS_TO_TICKS(2000));
     _nextionCmd("page 1");
     vTaskDelay(pdMS_TO_TICKS(200));
