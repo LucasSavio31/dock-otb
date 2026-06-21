@@ -1524,15 +1524,26 @@ body.theme-light .history-row.head{background:#fff}
             </button>
           </div>
 
-          <div style="margin-top:12px;display:flex;align-items:center;gap:10px">
-            <label style="display:flex;align-items:center;gap:8px;cursor:pointer;user-select:none">
-              <span class="switch" style="flex-shrink:0">
-                <input type="checkbox" id="standaloneToggle" onchange="standaloneToggleChange()">
-                <span class="switch-slider"></span>
-              </span>
-              <span style="font-size:11px;color:var(--muted)">Modo standalone</span>
-            </label>
-            <span id="standaloneHint" style="font-size:10px;color:var(--dim)">Desabilitado</span>
+          <div style="margin-top:14px;padding:10px 12px;background:var(--card2);border-radius:8px;border:1px solid var(--border)">
+            <div style="font-size:11px;font-weight:600;color:var(--muted);margin-bottom:8px;text-transform:uppercase;letter-spacing:.04em">Modo de operação</div>
+            <div style="display:flex;flex-direction:column;gap:6px">
+              <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px;color:var(--fg)">
+                <input type="radio" name="opMode" value="off" onchange="opModeChange('off')" style="accent-color:var(--accent)">
+                <span>Desabilitado</span>
+                <span style="font-size:10px;color:var(--dim)">— requer ESP32 via USB</span>
+              </label>
+              <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px;color:var(--fg)">
+                <input type="radio" name="opMode" value="standalone" onchange="opModeChange('standalone')" style="accent-color:var(--accent)">
+                <span>Standalone</span>
+                <span style="font-size:10px;color:var(--dim)">— firmware inicia automático ao detectar caneta</span>
+              </label>
+              <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px;color:var(--fg)">
+                <input type="radio" name="opMode" value="manual" onchange="opModeChange('manual')" style="accent-color:var(--accent)">
+                <span>Manual</span>
+                <span style="font-size:10px;color:var(--dim)">— acionamento pelo browser, funciona sem USB</span>
+              </label>
+            </div>
+            <div id="opModeHint" style="font-size:10px;color:var(--accent);margin-top:7px;min-height:14px"></div>
           </div>
         </div>
 
@@ -4763,47 +4774,108 @@ function rechargeSelectPen(ch) {
   _rechargeEnsureLiveRead();
 }
 
-// ── Modo standalone ──────────────────────────────────────────────────────────
-// Quando ativo, os botões de Iniciar/Parar ficam habilitados mesmo sem ESP32
-// conectado (útil para controle manual). Persiste em localStorage.
+// ── Modo de operação ─────────────────────────────────────────────────────────
+// 'off'        = padrão, requer serial conectado
+// 'standalone' = firmware controla automático, dashboard monitora
+// 'manual'     = usuário aciona pelo browser; simula localmente se sem serial
+// Persiste em localStorage ('otb_op_mode').
 
-function standaloneLoad() {
-  const on = localStorage.getItem('recharge_standalone') === '1';
-  const cb = document.getElementById('standaloneToggle');
-  if (cb) cb.checked = on;
-  _standaloneApply(on);
+let _simInterval = null;
+
+function opModeLoad() {
+  const mode = localStorage.getItem('otb_op_mode') || 'off';
+  const radio = document.querySelector(`input[name="opMode"][value="${mode}"]`);
+  if (radio) radio.checked = true;
+  _opModeApply(mode);
 }
 
-function standaloneToggleChange() {
-  const on = document.getElementById('standaloneToggle').checked;
-  localStorage.setItem('recharge_standalone', on ? '1' : '0');
-  _standaloneApply(on);
+function opModeChange(val) {
+  localStorage.setItem('otb_op_mode', val);
+  _opModeApply(val);
   _rechargeUpdateButtons();
 }
 
-function _standaloneApply(on) {
-  const hint = document.getElementById('standaloneHint');
-  if (hint) hint.textContent = on
-    ? '⚡ Ativo — controle manual habilitado sem ESP32'
-    : 'Desabilitado';
-  recharge.standalone = on;
+function _opModeApply(mode) {
+  recharge.opMode = mode;
+  const hints = {
+    off:        '',
+    standalone: '⚡ Firmware inicia recarga automaticamente ao detectar caneta + cartucho.',
+    manual:     '🖱 Clique em Iniciar para começar. Funciona sem ESP32 conectado (simulação).',
+  };
+  const hint = document.getElementById('opModeHint');
+  if (hint) hint.textContent = hints[mode] || '';
 }
 
-function _standaloneEnabled() {
-  return !!recharge.standalone;
-}
+function _opModeGet() { return recharge.opMode || 'off'; }
 
-function rechargeStart() {
-  if (recharge.selectedPen < 0 || (!serial.connected && !_standaloneEnabled())) return;
-  sendCmd('recharge ' + (recharge.selectedPen + 1), 400);
-  recharge.startTs = Date.now();
+// ── Simulação local (modo manual sem serial) ──────────────────────────────────
+function _simStart(pen) {
+  let pct = parseFloat(document.getElementById('rechargeLevelPct').textContent) || 0;
+  recharge.state    = 'RUNNING';
+  recharge.startTs  = Date.now();
   if (recharge.timerInterval) clearInterval(recharge.timerInterval);
   recharge.timerInterval = setInterval(_rechargeTickTimer, 1000);
-  _rechargeLog('▶ Recarga iniciada — caneta ' + (recharge.selectedPen + 1));
+  _rechargeUpdateButtons();
+  _rechargeLog('▶ [SIM] Recarga iniciada — caneta ' + (pen + 1));
+  const badge    = document.getElementById('rechargeStateBadge');
+  const navBadge = document.getElementById('rechargeBadge');
+  if (badge)    { badge.textContent = '⚡ Recarregando [SIM]'; badge.className = 'recharge-state-badge running'; }
+  if (navBadge) navBadge.style.display = '';
+  _simInterval = setInterval(() => {
+    pct = Math.min(pct + 2, 100);
+    _rechargeUpdateLevel(pct);
+    if (pct >= 80 && recharge.state === 'RUNNING') {
+      recharge.state = 'TAPERING';
+      if (badge) { badge.textContent = '🔽 Finalizando [SIM]'; badge.className = 'recharge-state-badge tapering'; }
+      _rechargeUpdateButtons();
+    }
+    if (pct >= 100) _simStop('DONE');
+  }, 500);
+}
+
+function _simStop(finalState) {
+  if (_simInterval)            { clearInterval(_simInterval); _simInterval = null; }
+  if (recharge.timerInterval) { clearInterval(recharge.timerInterval); recharge.timerInterval = null; }
+  recharge.state = finalState || 'ABORTED';
+  const labels   = { DONE: '✅ Completo', ABORTED: '⛔ Abortado' };
+  const badge    = document.getElementById('rechargeStateBadge');
+  const navBadge = document.getElementById('rechargeBadge');
+  if (badge)    { badge.textContent = labels[recharge.state] || recharge.state; badge.className = 'recharge-state-badge ' + recharge.state.toLowerCase(); }
+  if (navBadge) navBadge.style.display = 'none';
+  _rechargeUpdateButtons();
+  if (finalState === 'DONE') {
+    rechargeStats.totalCount++;
+    usageSave();
+    rechargeStatsRender();
+    _rechargeLog('✅ [SIM] Recarga concluída.');
+  } else {
+    _rechargeLog('■ [SIM] Recarga interrompida.');
+  }
+}
+
+// ── Iniciar / Parar ───────────────────────────────────────────────────────────
+function rechargeStart() {
+  const mode = _opModeGet();
+  if (recharge.selectedPen < 0) return;
+  if (mode === 'standalone') return; // firmware automático, sem ação manual
+  if (mode === 'off' && !serial.connected) return;
+  if (serial.connected) {
+    sendCmd('recharge ' + (recharge.selectedPen + 1), 400);
+    recharge.startTs = Date.now();
+    if (recharge.timerInterval) clearInterval(recharge.timerInterval);
+    recharge.timerInterval = setInterval(_rechargeTickTimer, 1000);
+    _rechargeLog('▶ Recarga iniciada — caneta ' + (recharge.selectedPen + 1));
+  } else {
+    _simStart(recharge.selectedPen);
+  }
 }
 
 function rechargeStop() {
-  if (!serial.connected) return;
+  const mode = _opModeGet();
+  if (!serial.connected) {
+    if (mode === 'manual') _simStop('ABORTED');
+    return;
+  }
   sendCmd('recharge stop', 400);
   if (recharge.timerInterval) { clearInterval(recharge.timerInterval); recharge.timerInterval = null; }
   _rechargeLog('■ Recarga interrompida pelo usuário.');
@@ -4826,11 +4898,21 @@ function _rechargeUpdateLevel(pct) {
 function _rechargeUpdateButtons() {
   const terminalStates = ['IDLE', 'DONE', 'TIMEOUT', 'SATURATED', 'SENSOR_ERR',
                           'ABORTED', 'NO_DEVICE', 'SKIP_FULL', 'SKIP_LEVEL_OK'];
-  const isActive  = recharge.state === 'RUNNING' || recharge.state === 'TAPERING';
-  const canSend   = serial.connected || _standaloneEnabled();
-  const canStart  = recharge.selectedPen >= 0 && canSend &&
-                    terminalStates.includes(recharge.state);
-  const canStop   = isActive && canSend;
+  const mode     = _opModeGet();
+  const isActive = recharge.state === 'RUNNING' || recharge.state === 'TAPERING';
+  const penOk    = recharge.selectedPen >= 0;
+  const idle     = terminalStates.includes(recharge.state);
+  let canStart, canStop;
+  if (mode === 'standalone') {
+    canStart = false;
+    canStop  = isActive && serial.connected;
+  } else if (mode === 'manual') {
+    canStart = penOk && idle;
+    canStop  = isActive;
+  } else {
+    canStart = penOk && serial.connected && idle;
+    canStop  = isActive && serial.connected;
+  }
   document.getElementById('btnRechargeStart').disabled = !canStart;
   document.getElementById('btnRechargeStop').disabled  = !canStop;
 }
@@ -5351,7 +5433,7 @@ window.addEventListener('load', async () => {
   try { buildReaderGrid(); } catch(e) { console.warn('buildReaderGrid:', e); }
   try { initChart(); }      catch(e) { console.warn('initChart (Chart.js):', e); }
   setLanguage(localStorage.getItem('otb-lang') || 'pt');
-  standaloneLoad();
+  opModeLoad();
 
   document.getElementById('historyStart')?.addEventListener('change', historyRenderList);
   document.getElementById('historyEnd')?.addEventListener('change', historyRenderList);
