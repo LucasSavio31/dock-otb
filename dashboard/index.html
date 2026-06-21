@@ -1705,6 +1705,44 @@ body.theme-light .history-row.head{background:#fff}
             <div id="capdacMsg" style="display:none;font-size:10px;color:var(--dim);margin-top:6px;font-family:monospace"></div>
           </div>
 
+          <!-- UID da caneta vinculada -->
+          <div id="calibUidRow" style="display:none;margin-bottom:14px;padding:10px 12px;border-radius:8px;background:rgba(92,111,255,.07);border:1px solid rgba(92,111,255,.2)">
+            <div style="display:flex;justify-content:space-between;align-items:center">
+              <div>
+                <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.8px;color:var(--muted)">UID da Caneta</div>
+                <div id="calibUidVal" style="font-family:monospace;font-size:12px;color:var(--fg);margin-top:3px">—</div>
+              </div>
+              <div id="calibUidSource" style="font-size:10px;padding:3px 8px;border-radius:4px;background:rgba(92,111,255,.15);color:var(--accent)">por posição</div>
+            </div>
+          </div>
+
+          <!-- Compensação RAW -->
+          <div class="calib-box" style="margin-bottom:14px;padding:12px;border-radius:8px;border:1px solid var(--border)">
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+              <div>
+                <div class="calib-section-lbl" style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.8px;color:var(--muted)">Compensação RAW</div>
+                <div class="calib-hint" style="font-size:10px;color:var(--dim);margin-top:2px">
+                  Subtrai offset de ADC antes da conversão pF — compensa deriva de baseline por caneta.
+                </div>
+              </div>
+              <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+                <span class="calib-section-lbl" style="font-size:11px;color:var(--muted)" id="rawOffsetToggleLabel">Desabilitado</span>
+                <span class="switch">
+                  <input type="checkbox" id="rawOffsetEnable" onchange="rawOffsetToggle()">
+                  <span class="switch-slider"></span>
+                </span>
+              </label>
+            </div>
+            <div id="rawOffsetValueRow" style="display:none;gap:8px;align-items:center">
+              <input type="number" id="rawOffsetInput" step="1"
+                class="calib-input" style="flex:1"
+                placeholder="Offset RAW (ex: -12000)">
+              <span class="calib-section-lbl" style="font-size:12px;color:var(--muted)">raw</span>
+              <button class="btn btn-outline btn-sm" onclick="rawOffsetSave()" id="btnRawOffsetSave" disabled>💾</button>
+            </div>
+            <div id="rawOffsetMsg" style="display:none;font-size:10px;color:var(--dim);margin-top:6px;font-family:monospace"></div>
+          </div>
+
           <div style="border-top:1px solid var(--border2);padding-top:12px;margin-bottom:10px">
             <div style="display:flex;gap:8px;margin-bottom:8px">
               <button id="btnCalibSave" class="btn btn-primary" style="flex:1;justify-content:center" onclick="calibSave()" disabled data-i18n="btn_calib_save">
@@ -2953,6 +2991,10 @@ async function startReading() {
         else if (line.startsWith('CALIB_CAPDAC_OK:'))      capdacHandleOk(line.substring(16));
         else if (line.startsWith('CALIB_CAPDAC_ERR:'))     capdacHandleErr(line.substring(17));
         else if (line.startsWith('CALIB_CAPDAC:'))         capdacHandleGet(line.substring(13));
+        else if (line.startsWith('CALIB_UID:'))            calibHandleUid(line.substring(10));
+        else if (line.startsWith('CALIB_RAW:'))            calibHandleRaw(line.substring(10));
+        else if (line.startsWith('CALIB_RAW_OK:'))         _calibShowMsg('✅ RAW offset salvo para Caneta ' + (parseInt(line.substring(13)) + 1) + '.', 'ok');
+        else if (line.startsWith('CALIB_RAW_ERR:'))        _calibShowMsg('❌ Erro RAW offset: ' + line.substring(14), 'err');
         else if (line.startsWith('OTA_'))                  otaHandleLine(line);
         else if (line === 'DOCK_BLOCKED')                  dockHandleBlocked();
         else if (line === 'DOCK_OK')                       dockHandleNormal();
@@ -5095,18 +5137,25 @@ function calibSelectPen(ch) {
   document.getElementById('calibLevelBar').style.height    = '0%';
   document.getElementById('calibLiveStatus').textContent   = t('calib_consulting');
 
-  document.getElementById('btnCalibSave').disabled  = false;
-  document.getElementById('btnCalibReset').disabled = false;
-  document.getElementById('btnCapdacSave').disabled = false;
+  document.getElementById('btnCalibSave').disabled      = false;
+  document.getElementById('btnCalibReset').disabled     = false;
+  document.getElementById('btnCapdacSave').disabled     = false;
+  document.getElementById('btnRawOffsetSave').disabled  = false;
 
-  // Reseta painel CAPDAC antes de carregar da NVS
-  document.getElementById('capdacEnable').checked = false;
-  document.getElementById('capdacPfInput').value  = '';
+  // Reseta painel CAPDAC e RAW offset antes de carregar da NVS
+  document.getElementById('capdacEnable').checked   = false;
+  document.getElementById('capdacPfInput').value    = '';
   capdacToggle();
+  document.getElementById('rawOffsetEnable').checked = false;
+  document.getElementById('rawOffsetInput').value   = '';
+  rawOffsetToggle();
+  const uidRow = document.getElementById('calibUidRow');
+  if (uidRow) uidRow.style.display = 'none';
 
   _calibEnsureLiveRead();
   calibLoadFromNvs();
   _capdacLoadForPen(ch);
+  _rawOffsetLoadForPen(ch);
 }
 
 function calibHandleRead(line) {
@@ -5219,9 +5268,14 @@ function calibHandleResetOk(line) {
   document.getElementById('calibCheioInput').value = '';
   document.getElementById('calibStepInput').value  = '10';
   document.getElementById('calibStepSlider').value = '10';
-  document.getElementById('capdacEnable').checked  = false;
-  document.getElementById('capdacPfInput').value   = '';
+  document.getElementById('capdacEnable').checked    = false;
+  document.getElementById('capdacPfInput').value     = '';
   capdacToggle();
+  document.getElementById('rawOffsetEnable').checked = false;
+  document.getElementById('rawOffsetInput').value    = '';
+  rawOffsetToggle();
+  const uidRowR = document.getElementById('calibUidRow');
+  if (uidRowR) uidRowR.style.display = 'none';
   calibUpdateStepPreview();
 }
 
@@ -5403,6 +5457,84 @@ function capdacHandleGet(line) {
 function _capdacLoadForPen(pen) {
   if (!serial.connected || pen < 0) return;
   sendCmd('calib capdac get ' + (pen + 1), 300);
+}
+
+// ── RAW Offset ──────────────────────────────────────────────────
+function rawOffsetToggle() {
+  const en  = document.getElementById('rawOffsetEnable').checked;
+  const row = document.getElementById('rawOffsetValueRow');
+  const lbl = document.getElementById('rawOffsetToggleLabel');
+  const btn = document.getElementById('btnRawOffsetSave');
+  row.style.display  = en ? 'flex' : 'none';
+  lbl.textContent    = en ? 'Habilitado' : 'Desabilitado';
+  if (btn) btn.disabled = !serial.connected;
+}
+
+function rawOffsetSave() {
+  if (calib.selectedPen < 0) {
+    _calibShowMsg('⚠️ Selecione uma caneta primeiro.', 'warn'); return;
+  }
+  if (!serial.connected) {
+    _calibShowMsg('⚠️ Não conectado ao ESP32.', 'warn'); return;
+  }
+  const en  = document.getElementById('rawOffsetEnable').checked ? 1 : 0;
+  const off = parseInt(document.getElementById('rawOffsetInput').value) || 0;
+  sendCmd('calib rawoffset set ' + (calib.selectedPen + 1) + ' ' + en + ' ' + off, 400);
+}
+
+function _rawOffsetLoadForPen(pen) {
+  if (!serial.connected || pen < 0) return;
+  sendCmd('calib rawoffset get ' + (pen + 1), 300);
+}
+
+function calibHandleUid(line) {
+  // format: ch,uid_hex
+  const parts = line.split(',');
+  if (parts.length < 2) return;
+  const ch  = parseInt(parts[0]);
+  const uid = parts[1].trim();
+  if (calib.selectedPen !== ch) return;
+
+  const row = document.getElementById('calibUidRow');
+  const val = document.getElementById('calibUidVal');
+  const src = document.getElementById('calibUidSource');
+  if (!row || !val || !src) return;
+
+  row.style.display = '';
+  val.textContent   = uid && uid !== 'none' ? uid : '—';
+  src.textContent   = uid && uid !== 'none' ? 'por UID' : 'por posição';
+  src.style.background = uid && uid !== 'none'
+    ? 'rgba(63,185,80,.15)' : 'rgba(92,111,255,.15)';
+  src.style.color = uid && uid !== 'none' ? 'var(--green)' : 'var(--accent)';
+}
+
+function calibHandleRaw(line) {
+  // format: ch,en,offset,uid_hex
+  const parts = line.split(',');
+  if (parts.length < 3) return;
+  const ch  = parseInt(parts[0]);
+  const en  = parseInt(parts[1]) !== 0;
+  const off = parseInt(parts[2]);
+  const uid = parts.length >= 4 ? parts[3].trim() : '';
+  if (calib.selectedPen !== ch) return;
+
+  document.getElementById('rawOffsetEnable').checked = en;
+  document.getElementById('rawOffsetInput').value    = off;
+  rawOffsetToggle();
+
+  // Atualiza UID se veio no CALIB_RAW
+  if (uid && uid !== 'none') {
+    const row = document.getElementById('calibUidRow');
+    const val = document.getElementById('calibUidVal');
+    const src = document.getElementById('calibUidSource');
+    if (row && val && src) {
+      row.style.display = '';
+      val.textContent   = uid;
+      src.textContent   = 'por UID';
+      src.style.background = 'rgba(63,185,80,.15)';
+      src.style.color      = 'var(--green)';
+    }
+  }
 }
 // ───────────────────────────────────────────────────────────────
 

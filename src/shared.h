@@ -3,7 +3,7 @@
 //  shared.h - V5
 //  Tipos, handles globais e estado compartilhado
 // =============================================================
-#define FIRMWARE_VERSION "V2.2.3"
+#define FIRMWARE_VERSION "V2.2.4"
 #include <Arduino.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
@@ -284,9 +284,11 @@ extern TagState gTag;
 // Cache por leitor NFC (protegido por mutexTag)
 // Indices 0-2 = canetas, 3-5 = cartuchos
 struct TagReaderState {
-  TagData data    = {};
-  bool    valid   = false;
+  TagData data     = {};
+  bool    valid    = false;
   bool    presente = false;
+  uint8_t uid[7]  = {};
+  uint8_t uidLen  = 0;
 };
 extern TagReaderState gTagReaders[6];
 
@@ -343,12 +345,16 @@ extern SemaphoreHandle_t mutexNivel;
 // Quando valid==false, task_sensor usa as constantes NIVEL_PF_* como fallback.
 // =========================
 struct CalibData {
-  float   vazioPf;   // pF com reservatorio vazio
-  float   cheioPf;   // pF com reservatorio cheio
-  uint8_t step;      // passo de variacao de nivel (%) - deve dividir 100
-  bool    valid;     // true = calibracao salva e carregada da NVS
-  bool    capdacEn;  // true = subtrair offset de capacitancia parasita
-  float   capdacPf;  // offset a subtrair do pF bruto antes de calcular nivel
+  float   vazioPf;     // pF com reservatorio vazio
+  float   cheioPf;     // pF com reservatorio cheio
+  uint8_t step;        // passo de variacao de nivel (%) - deve dividir 100
+  bool    valid;       // true = calibracao salva e carregada da NVS
+  bool    capdacEn;    // true = subtrair offset de capacitancia parasita
+  float   capdacPf;    // offset a subtrair do pF bruto antes de calcular nivel
+  bool    rawOffsetEn; // true = aplicar compensacao RAW antes da conversao pF
+  int32_t rawOffset;   // offset de ADC raw subtraido antes de converter para pF
+  uint8_t penUid[7];   // UID da caneta que originou esta calibracao (uidLen==0 = por posicao)
+  uint8_t penUidLen;   // comprimento do UID (0 = calibracao por posicao, nao por caneta)
 };
 extern CalibData         gCalib[3];      // indice = canal TCA (0-2)
 extern SemaphoreHandle_t mutexCalib;     // protege gCalib

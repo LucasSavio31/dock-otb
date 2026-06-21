@@ -85,12 +85,24 @@ void taskNVS(void *param) {
           gCalib[ch].capdacPf = pfv;
           xSemaphoreGive(mutexCalib);
         }
-        // taskSensor pode ter inicializado o chip antes desta leitura (race boot)
-        // dirty flag garante que o chip sera re-inicializado com CAPDAC correto
         if (en) {
           gCalibDirty[ch] = true;
           Serial.printf("[NVS] CAPDAC CH%d: %.4f pF\n", ch, pfv);
         }
+      }
+      // Carrega rawOffset por canal (fallback; substituído por UID quando caneta detectada)
+      char kre[10], kro[10];
+      snprintf(kre, sizeof(kre), "raw_e%d", ch);
+      snprintf(kro, sizeof(kro), "raw_o%d", ch);
+      if (pc.isKey(kre)) {
+        bool    en  = pc.getUChar(kre, 0) != 0;
+        int32_t off = (int32_t)pc.getInt(kro, 0);
+        if (xSemaphoreTake(mutexCalib, pdMS_TO_TICKS(200)) == pdTRUE) {
+          gCalib[ch].rawOffsetEn = en;
+          gCalib[ch].rawOffset   = off;
+          xSemaphoreGive(mutexCalib);
+        }
+        if (en) Serial.printf("[NVS] RAW-Offset CH%d: %ld\n", ch, (long)off);
       }
       }
       pc.end();

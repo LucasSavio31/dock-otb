@@ -250,11 +250,17 @@ static void _publicarEvento(TagEvent::Type type, const TagData *data = nullptr,
           gTagReaders[readerIdx].presente = true;
           gTagReaders[readerIdx].valid    = (data != nullptr);
           if (data) gTagReaders[readerIdx].data = *data;
+          if (uid && uidLen > 0) {
+            memcpy(gTagReaders[readerIdx].uid, uid, uidLen);
+            gTagReaders[readerIdx].uidLen = uidLen;
+          }
           break;
         case TagEvent::TAG_REMOVIDA:
           gTagReaders[readerIdx].presente = false;
           gTagReaders[readerIdx].valid    = false;
           memset(&gTagReaders[readerIdx].data, 0, sizeof(TagData));
+          memset(gTagReaders[readerIdx].uid,   0, 7);
+          gTagReaders[readerIdx].uidLen = 0;
           break;
         case TagEvent::TAG_LIDA:
         case TagEvent::TAG_GRAVADA:

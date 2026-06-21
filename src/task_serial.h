@@ -737,6 +737,38 @@ static void _menuCalib(const String& args) {
       xSemaphoreGive(mutexCalib);
     }
 
+    // Salva também vinculado ao UID da caneta presente neste canal
+    uint8_t penUid[7]; uint8_t penUidLen = 0;
+    if (xSemaphoreTake(mutexTag, pdMS_TO_TICKS(20)) == pdTRUE) {
+      memcpy(penUid, gTagReaders[ch].uid, 7);
+      penUidLen = gTagReaders[ch].uidLen;
+      xSemaphoreGive(mutexTag);
+    }
+    if (penUidLen > 0) {
+      char hex[15]; hex[0] = '\0';
+      for (uint8_t i = 0; i < penUidLen; i++) snprintf(hex + i*2, 3, "%02X", penUid[i]);
+      if (mutexNVS && xSemaphoreTake(mutexNVS, pdMS_TO_TICKS(300)) == pdTRUE) {
+        Preferences pu;
+        if (pu.begin("pen-cal", false)) {
+          char k[16];
+          snprintf(k, sizeof(k), "v%s", hex); pu.putFloat(k, vazio);
+          snprintf(k, sizeof(k), "c%s", hex); pu.putFloat(k, cheio);
+          snprintf(k, sizeof(k), "s%s", hex); pu.putUChar(k, step);
+          // Preserva rawOffset/capdac existentes (não sobrescreve ao salvar nível)
+          snprintf(k, sizeof(k), "o%s", hex); pu.putUChar(k, 1);
+          pu.end();
+        }
+        xSemaphoreGive(mutexNVS);
+      }
+      // Atualiza gCalib com referência ao UID
+      if (xSemaphoreTake(mutexCalib, pdMS_TO_TICKS(200)) == pdTRUE) {
+        memcpy(gCalib[ch].penUid, penUid, penUidLen);
+        gCalib[ch].penUidLen = penUidLen;
+        xSemaphoreGive(mutexCalib);
+      }
+      Serial.printf("CALIB_UID:%d,%s\n", ch, hex);
+    }
+
     Serial.printf("CALIB_SAVE_OK:%d\n", ch);
     logdbPublishf("Serial", "Calibracao", LOG_SUCCESS, "Calibracao salva na caneta %u.", (unsigned)(ch + 1));
   }
@@ -840,6 +872,98 @@ static void _menuCalib(const String& args) {
       logdbPublishf("Serial", "CAPDAC", LOG_SUCCESS, "CAPDAC atualizado na caneta %u.", (unsigned)(ch + 1));
     } else {
       Serial.println("CALIB_CAPDAC_ERR:0,unknown_subcommand");
+    }
+  }
+
+  // ── calib rawoffset get/set <ch> [offset] ─────────────────────────────────
+  else if (args.startsWith("rawoffset ")) {
+    String sub = args.substring(10); sub.trim();
+
+    if (sub.startsWith("get ")) {
+      int ch = sub.substring(4).toInt() - 1;
+      if (ch < 0 || ch > 2) { Serial.println("CALIB_RAW_ERR:0,invalid_channel"); return; }
+      bool    en  = false;
+      int32_t off = 0;
+      if (xSemaphoreTake(mutexCalib, pdMS_TO_TICKS(100)) == pdTRUE) {
+        en  = gCalib[ch].rawOffsetEn;
+        off = gCalib[ch].rawOffset;
+        xSemaphoreGive(mutexCalib);
+      }
+      // Inclui UID ativo neste canal
+      uint8_t uid[7]; uint8_t uidLen = 0;
+      char hex[15]; hex[0] = '\0';
+      if (xSemaphoreTake(mutexTag, pdMS_TO_TICKS(20)) == pdTRUE) {
+        memcpy(uid, gTagReaders[ch].uid, 7);
+        uidLen = gTagReaders[ch].uidLen;
+        xSemaphoreGive(mutexTag);
+      }
+      if (uidLen > 0) for (uint8_t i = 0; i < uidLen; i++) snprintf(hex+i*2, 3, "%02X", uid[i]);
+      Serial.printf("CALIB_RAW:%d,%d,%ld,%s\n", ch, en ? 1 : 0, (long)off, uidLen > 0 ? hex : "none");
+
+    } else if (sub.startsWith("set ")) {
+      // formato: set <ch_1-3> <0|1> <offset_int>
+      String rest = sub.substring(4); rest.trim();
+      int sp1 = rest.indexOf(' ');
+      if (sp1 < 0) { Serial.println("CALIB_RAW_ERR:0,invalid_format"); return; }
+      int ch = rest.substring(0, sp1).toInt() - 1;
+      if (ch < 0 || ch > 2) { Serial.println("CALIB_RAW_ERR:0,invalid_channel"); return; }
+      rest = rest.substring(sp1 + 1); rest.trim();
+      int sp2 = rest.indexOf(' ');
+      if (sp2 < 0) { Serial.printf("CALIB_RAW_ERR:%d,missing_offset\n", ch); return; }
+      bool    en  = rest.substring(0, sp2).toInt() != 0;
+      int32_t off = (int32_t)rest.substring(sp2 + 1).toInt();
+
+      // Salva na NVS por canal (otb-dock)
+      if (!mutexNVS || xSemaphoreTake(mutexNVS, pdMS_TO_TICKS(300)) != pdTRUE) {
+        Serial.printf("CALIB_RAW_ERR:%d,nvs_busy\n", ch); return; }
+      Preferences prefs;
+      if (!prefs.begin("otb-dock", false)) {
+        xSemaphoreGive(mutexNVS);
+        Serial.printf("CALIB_RAW_ERR:%d,nvs_open_failed\n", ch); return; }
+      char ke[10], ko[10];
+      snprintf(ke, sizeof(ke), "raw_e%d", ch);
+      snprintf(ko, sizeof(ko), "raw_o%d", ch);
+      prefs.putUChar(ke, en ? 1 : 0);
+      prefs.putInt(ko, (int32_t)off);
+      prefs.end();
+      xSemaphoreGive(mutexNVS);
+
+      // Salva também por UID se houver caneta presente
+      uint8_t penUid[7]; uint8_t penUidLen = 0;
+      if (xSemaphoreTake(mutexTag, pdMS_TO_TICKS(20)) == pdTRUE) {
+        memcpy(penUid, gTagReaders[ch].uid, 7);
+        penUidLen = gTagReaders[ch].uidLen;
+        xSemaphoreGive(mutexTag);
+      }
+      if (penUidLen > 0) {
+        char hex[15]; hex[0] = '\0';
+        for (uint8_t i = 0; i < penUidLen; i++) snprintf(hex+i*2, 3, "%02X", penUid[i]);
+        if (mutexNVS && xSemaphoreTake(mutexNVS, pdMS_TO_TICKS(300)) == pdTRUE) {
+          Preferences pu;
+          if (pu.begin("pen-cal", false)) {
+            char k[16];
+            snprintf(k, sizeof(k), "r%s", hex); pu.putInt(k,    (int32_t)off);
+            snprintf(k, sizeof(k), "R%s", hex); pu.putUChar(k,  en ? 1 : 0);
+            snprintf(k, sizeof(k), "o%s", hex); pu.putUChar(k,  1);
+            pu.end();
+          }
+          xSemaphoreGive(mutexNVS);
+        }
+        Serial.printf("CALIB_UID:%d,%s\n", ch, hex);
+      }
+
+      if (xSemaphoreTake(mutexCalib, pdMS_TO_TICKS(200)) == pdTRUE) {
+        gCalib[ch].rawOffsetEn = en;
+        gCalib[ch].rawOffset   = off;
+        xSemaphoreGive(mutexCalib);
+      }
+      gCalibDirty[ch] = true;
+      Serial.printf("CALIB_RAW_OK:%d\n", ch);
+      logdbPublishf("Serial", "RAW-Offset", LOG_SUCCESS,
+                    "RAW offset atualizado na caneta %u (en=%d off=%ld).",
+                    (unsigned)(ch+1), en, (long)off);
+    } else {
+      Serial.println("CALIB_RAW_ERR:0,unknown_subcommand");
     }
   }
 

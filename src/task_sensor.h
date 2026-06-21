@@ -2,6 +2,7 @@
 #include "shared.h"
 #include "task_erros.h"
 #include <Wire.h>
+#include <Preferences.h>
 
 #define FDC_NUM_CANAIS 3
 
@@ -28,6 +29,60 @@ static float _clampf(float v, float lo, float hi) {
   if (v < lo) return lo;
   if (v > hi) return hi;
   return v;
+}
+
+// ── Calibração vinculada ao UID da caneta ──────────────────────────────────
+// Namespace NVS: "pen-cal"  Chave: prefixo(1) + uid_hex(até 14) = até 15 chars
+// Prefixos: v=vazioPf  c=cheioPf  s=step  k=capdacEn  p=capdacPf  r=rawOffset  R=rawOffsetEn  o=válido
+
+static uint8_t _uidAtivo[FDC_NUM_CANAIS][7] = {};
+static uint8_t _uidAtivoLen[FDC_NUM_CANAIS] = {0, 0, 0};
+
+static void _uidParaHex(const uint8_t *uid, uint8_t len, char *out, uint8_t outSz) {
+  out[0] = '\0';
+  for (uint8_t i = 0; i < len && i < 7 && (i*2+2) < outSz; i++)
+    snprintf(out + i*2, 3, "%02X", uid[i]);
+}
+
+static void _carregarCalibUid(uint8_t ch, const uint8_t *uid, uint8_t uidLen) {
+  if (uidLen == 0 || !mutexNVS) return;
+  char hex[15]; // 7 bytes = 14 hex chars
+  _uidParaHex(uid, uidLen, hex, sizeof(hex));
+
+  if (xSemaphoreTake(mutexNVS, pdMS_TO_TICKS(400)) != pdTRUE) return;
+  Preferences prefs;
+  bool found = false;
+  CalibData c = {};
+  if (prefs.begin("pen-cal", true)) {
+    char k[16];
+    snprintf(k, sizeof(k), "o%s", hex);
+    if (prefs.getUChar(k, 0)) {
+      found = true;
+      snprintf(k, sizeof(k), "v%s", hex); c.vazioPf    = prefs.getFloat(k, 0.0f);
+      snprintf(k, sizeof(k), "c%s", hex); c.cheioPf    = prefs.getFloat(k, 1.0f);
+      snprintf(k, sizeof(k), "s%s", hex); c.step       = prefs.getUChar(k, 5);
+      snprintf(k, sizeof(k), "k%s", hex); c.capdacEn   = prefs.getUChar(k, 0) != 0;
+      snprintf(k, sizeof(k), "p%s", hex); c.capdacPf   = prefs.getFloat(k, 0.0f);
+      snprintf(k, sizeof(k), "r%s", hex); c.rawOffset  = (int32_t)prefs.getInt(k, 0);
+      snprintf(k, sizeof(k), "R%s", hex); c.rawOffsetEn = prefs.getUChar(k, 0) != 0;
+      c.valid = true;
+      memcpy(c.penUid, uid, uidLen);
+      c.penUidLen = uidLen;
+    }
+    prefs.end();
+  }
+  xSemaphoreGive(mutexNVS);
+
+  if (found) {
+    if (xSemaphoreTake(mutexCalib, pdMS_TO_TICKS(200)) == pdTRUE) {
+      gCalib[ch] = c;
+      xSemaphoreGive(mutexCalib);
+    }
+    gCalibDirty[ch] = true; // reinicia chip com novo CAPDAC
+    Serial.printf("[Sensor] CH%d: calibracao UID %s carregada da NVS.\n", ch, hex);
+  } else {
+    Serial.printf("[Sensor] CH%d: sem calibracao para UID %s — usando posicao.\n", ch, hex);
+  }
 }
 
 static float _pfToNivelPct(ChipTipo chip, float pf) {
@@ -370,6 +425,21 @@ void taskSensor(void *param) {
             gChipCanalTipo[ch] = (uint8_t)_chipCanal[ch];
           }
 
+          // Detecta troca de caneta pelo UID e carrega calibração vinculada
+          if (ch < FDC_NUM_CANAIS) {
+            uint8_t uid[7]; uint8_t uidLen = 0;
+            if (xSemaphoreTake(mutexTag, pdMS_TO_TICKS(10)) == pdTRUE) {
+              memcpy(uid, gTagReaders[ch].uid, 7);
+              uidLen = gTagReaders[ch].uidLen;
+              xSemaphoreGive(mutexTag);
+            }
+            if (uidLen != _uidAtivoLen[ch] || memcmp(uid, _uidAtivo[ch], 7) != 0) {
+              memcpy(_uidAtivo[ch], uid, 7);
+              _uidAtivoLen[ch] = uidLen;
+              _carregarCalibUid(ch, uid, uidLen);
+            }
+          }
+
           if (_chipCanal[ch] != CHIP_NONE) {
             ok = _lerChip(_chipCanal[ch], raw, pf);
 
@@ -387,6 +457,23 @@ void taskSensor(void *param) {
             } else {
               _falhasCanal[ch] = 0;
               erroClear(ERR_E211 + ch);
+
+              // Aplica compensação RAW antes da conversão para pF
+              bool rawOff = false;
+              int32_t rawOfs = 0;
+              if (xSemaphoreTake(mutexCalib, pdMS_TO_TICKS(10)) == pdTRUE) {
+                rawOff = gCalib[ch].rawOffsetEn;
+                rawOfs = gCalib[ch].rawOffset;
+                xSemaphoreGive(mutexCalib);
+              }
+              if (rawOff) {
+                raw -= rawOfs;
+                if (_chipCanal[ch] == CHIP_FDC1004)
+                  pf = (float)raw / 524288.0f;
+                else if (_chipCanal[ch] == CHIP_AD7747)
+                  pf = ((float)raw - 8388608.0f) / 8388608.0f * 4.096f;
+              }
+
               nivelPct = _pfToNivelPctCalib(ch, _chipCanal[ch], pf);
               _aplicarFiltroNivel(ch, _chipCanal[ch], pf, nivelPct);
               saturado = _sensorSaturado(_chipCanal[ch], raw, pf, nivelPct);
