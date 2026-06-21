@@ -239,7 +239,13 @@ void taskRecarga(void *param) {
           stable = false;
         }
       }
-      if (!stable) continue;
+      if (!stable) {
+        if (xSemaphoreTake(mutexRecharge, pdMS_TO_TICKS(10)) == pdTRUE) {
+          gRecharge.status = RechargeInfo::ABORTED;
+          xSemaphoreGive(mutexRecharge);
+        }
+        continue;
+      }
 
       // Relê nível após estabilização
       if (xSemaphoreTake(mutexNivel, pdMS_TO_TICKS(20)) == pdTRUE) {
@@ -248,7 +254,13 @@ void taskRecarga(void *param) {
       }
 
       // ── 3. Verificação de nível ───────────────────────────
+      // Limpa gRecharge nos caminhos de skip: evita que nextion fique travado em
+      // DETECTING quando a caneta já está cheia o suficiente para não recarregar.
       if (levelPct >= RECHARGE_LEVEL_SKIP) {
+        if (xSemaphoreTake(mutexRecharge, pdMS_TO_TICKS(10)) == pdTRUE) {
+          gRecharge.status = RechargeInfo::IDLE;
+          xSemaphoreGive(mutexRecharge);
+        }
         Serial.printf("RECHARGE_STATUS:%d,%.1f,0,SKIP_FULL\n", ch, levelPct);
         logdbPublishf("Recarga", "Pulada", LOG_INFO,
                       "Pos %u pulada: nivel=%.1f%% >= %.0f%%.",
@@ -256,7 +268,10 @@ void taskRecarga(void *param) {
         continue;
       }
       if (levelPct >= RECHARGE_LEVEL_NEED) {
-        // Entre 10 % e 60 %: sem ação
+        if (xSemaphoreTake(mutexRecharge, pdMS_TO_TICKS(10)) == pdTRUE) {
+          gRecharge.status = RechargeInfo::IDLE;
+          xSemaphoreGive(mutexRecharge);
+        }
         Serial.printf("RECHARGE_STATUS:%d,%.1f,0,SKIP_LEVEL_OK\n", ch, levelPct);
         continue;
       }
@@ -389,6 +404,15 @@ void taskRecarga(void *param) {
                         state == RechargeInfo::TAPERING ? "TAPERING" : "RUNNING");
         else if (state == RechargeInfo::DONE)
           Serial.printf("RECHARGE_STATUS:%d,%.1f,0,DONE\n", ch, levelPct);
+      }
+
+      // Se o loop saiu via break (SENSOR_ERR, TIMEOUT, ABORTED) sem atualizar gRecharge,
+      // garante que o nextion veja um estado não-ativo e retorne à tela 1
+      if (!success && state != RechargeInfo::DONE) {
+        if (xSemaphoreTake(mutexRecharge, pdMS_TO_TICKS(10)) == pdTRUE) {
+          gRecharge.status = RechargeInfo::ABORTED;
+          xSemaphoreGive(mutexRecharge);
+        }
       }
 
       // ── 5. Pós-recarga ────────────────────────────────────
