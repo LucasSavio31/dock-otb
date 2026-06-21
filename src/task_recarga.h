@@ -188,6 +188,40 @@ static bool _posicaoApta(uint8_t ch, float *outLevel) {
   return true;
 }
 
+// Bloqueia até que operador remova e reinsira a caneta (NFC) OU o sensor (FDC/I2C).
+// Chamado após ABORTED para impedir reinício automático sem interação física.
+static void _aguardarResetPos(uint8_t ch) {
+  Serial.printf("RECHARGE_STATUS:%d,0,0,WAIT_RESET\n", ch);
+  logdbPublishf("Recarga", "AguardaReset", LOG_WARN,
+                "Pos=%u aguardando remoção+reinserção para novo ciclo.", (unsigned)(ch + 1));
+  bool penRemovida   = false;
+  bool sensorOffline = false;
+
+  for (;;) {
+    if (gBloqueado) return;
+    vTaskDelay(pdMS_TO_TICKS(300));
+
+    bool penPresente = false, sensorOk = false;
+    if (xSemaphoreTake(mutexTag, pdMS_TO_TICKS(20)) == pdTRUE) {
+      penPresente = gTagReaders[ch].presente;
+      xSemaphoreGive(mutexTag);
+    }
+    if (xSemaphoreTake(mutexNivel, pdMS_TO_TICKS(20)) == pdTRUE) {
+      sensorOk = gNivel[ch].leituraOk;
+      xSemaphoreGive(mutexNivel);
+    }
+
+    if (!penPresente) penRemovida   = true;
+    if (!sensorOk)    sensorOffline = true;
+
+    // Pronto quando: caneta foi removida e voltou, OU sensor foi offline e voltou
+    if ((penRemovida && penPresente) || (sensorOffline && sensorOk)) {
+      Serial.printf("[Recarga] Pos %u: reset — iniciando novo ciclo.\n", ch + 1);
+      return;
+    }
+  }
+}
+
 // ── Task ──────────────────────────────────────────────────────
 void taskRecarga(void *param) {
   vTaskDelay(pdMS_TO_TICKS(8000));
@@ -244,6 +278,7 @@ void taskRecarga(void *param) {
           gRecharge.status = RechargeInfo::ABORTED;
           xSemaphoreGive(mutexRecharge);
         }
+        _aguardarResetPos(ch); // aguarda remoção+reinserção antes de novo ciclo
         continue;
       }
 
@@ -420,6 +455,11 @@ void taskRecarga(void *param) {
       }
 
       // ── 5. Pós-recarga ────────────────────────────────────
+      // Saída sem sucesso (emergência, timeout, sensor): bloqueia até reset físico
+      if (!success) {
+        _aguardarResetPos(ch);
+      }
+
       if (success) {
         _rechargeIncrementPersistentCount();
         gRechargeCount++;

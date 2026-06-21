@@ -4955,7 +4955,7 @@ function _rechargeUpdateLevel(pct) {
 
 function _rechargeUpdateButtons() {
   const terminalStates = ['IDLE', 'DONE', 'TIMEOUT', 'SATURATED', 'SENSOR_ERR',
-                          'ABORTED', 'NO_DEVICE', 'SKIP_FULL', 'SKIP_LEVEL_OK'];
+                          'ABORTED', 'NO_DEVICE', 'SKIP_FULL', 'SKIP_LEVEL_OK', 'WAIT_RESET'];
   const mode     = _opModeGet();
   const isActive = recharge.state === 'RUNNING' || recharge.state === 'TAPERING';
   const penOk    = recharge.selectedPen >= 0;
@@ -5017,6 +5017,7 @@ function rechargeHandleStatus(line) {
     DETECTING:     '🔍 Detectando',
     SKIP_FULL:     '✓ Já carregado',
     SKIP_LEVEL_OK: '✓ Nível OK',
+    WAIT_RESET:    '⚠️ Remova e reinsira',
   };
   badge.textContent = labels[state] || state;
   badge.className = 'recharge-state-badge ' + state.toLowerCase();
