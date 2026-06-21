@@ -586,6 +586,10 @@ body.theme-light .history-row.head{background:#fff}
 .recharge-state-badge.timeout{background:rgba(248,81,73,.12);color:var(--red)}
 .recharge-state-badge.saturated{background:rgba(240,136,62,.18);color:var(--orange)}
 .recharge-state-badge.sensor_err{background:rgba(248,81,73,.18);color:var(--red)}
+.recharge-state-badge.aborted{background:rgba(248,81,73,.12);color:var(--red)}
+.recharge-state-badge.no_device{background:rgba(139,148,158,.1);color:var(--muted)}
+.recharge-state-badge.detecting{background:rgba(92,111,255,.08);color:var(--muted)}
+.recharge-state-badge.skip_full,.recharge-state-badge.skip_level_ok{background:rgba(63,185,80,.08);color:var(--green)}
 .recharge-metrics{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px}
 .recharge-metric{background:rgba(8,11,16,.5);border:1px solid var(--border);border-radius:8px;padding:10px 12px;text-align:center}
 .recharge-metric-val{font-size:22px;font-weight:800;color:var(--text);font-variant-numeric:tabular-nums}
@@ -1520,8 +1524,15 @@ body.theme-light .history-row.head{background:#fff}
             </button>
           </div>
 
-          <div style="margin-top:12px;font-size:10px;color:var(--dim)" data-i18n="recharge_standalone">
-            ⚠️ Em modo standalone. Conecte ao ESP32 para controle automático.
+          <div style="margin-top:12px;display:flex;align-items:center;gap:10px">
+            <label style="display:flex;align-items:center;gap:8px;cursor:pointer;user-select:none">
+              <span class="switch" style="flex-shrink:0">
+                <input type="checkbox" id="standaloneToggle" onchange="standaloneToggleChange()">
+                <span class="switch-slider"></span>
+              </span>
+              <span style="font-size:11px;color:var(--muted)">Modo standalone</span>
+            </label>
+            <span id="standaloneHint" style="font-size:10px;color:var(--dim)">Desabilitado</span>
           </div>
         </div>
 
@@ -4752,8 +4763,38 @@ function rechargeSelectPen(ch) {
   _rechargeEnsureLiveRead();
 }
 
+// ── Modo standalone ──────────────────────────────────────────────────────────
+// Quando ativo, os botões de Iniciar/Parar ficam habilitados mesmo sem ESP32
+// conectado (útil para controle manual). Persiste em localStorage.
+
+function standaloneLoad() {
+  const on = localStorage.getItem('recharge_standalone') === '1';
+  const cb = document.getElementById('standaloneToggle');
+  if (cb) cb.checked = on;
+  _standaloneApply(on);
+}
+
+function standaloneToggleChange() {
+  const on = document.getElementById('standaloneToggle').checked;
+  localStorage.setItem('recharge_standalone', on ? '1' : '0');
+  _standaloneApply(on);
+  _rechargeUpdateButtons();
+}
+
+function _standaloneApply(on) {
+  const hint = document.getElementById('standaloneHint');
+  if (hint) hint.textContent = on
+    ? '⚡ Ativo — controle manual habilitado sem ESP32'
+    : 'Desabilitado';
+  recharge.standalone = on;
+}
+
+function _standaloneEnabled() {
+  return !!recharge.standalone;
+}
+
 function rechargeStart() {
-  if (recharge.selectedPen < 0 || !serial.connected) return;
+  if (recharge.selectedPen < 0 || (!serial.connected && !_standaloneEnabled())) return;
   sendCmd('recharge ' + (recharge.selectedPen + 1), 400);
   recharge.startTs = Date.now();
   if (recharge.timerInterval) clearInterval(recharge.timerInterval);
@@ -4783,10 +4824,13 @@ function _rechargeUpdateLevel(pct) {
 }
 
 function _rechargeUpdateButtons() {
-  const terminalStates = ['IDLE', 'DONE', 'TIMEOUT', 'SATURATED', 'SENSOR_ERR'];
-  const canStart = recharge.selectedPen >= 0 && serial.connected &&
-                   terminalStates.includes(recharge.state);
-  const canStop  = recharge.state === 'RUNNING' || recharge.state === 'TAPERING';
+  const terminalStates = ['IDLE', 'DONE', 'TIMEOUT', 'SATURATED', 'SENSOR_ERR',
+                          'ABORTED', 'NO_DEVICE', 'SKIP_FULL', 'SKIP_LEVEL_OK'];
+  const isActive  = recharge.state === 'RUNNING' || recharge.state === 'TAPERING';
+  const canSend   = serial.connected || _standaloneEnabled();
+  const canStart  = recharge.selectedPen >= 0 && canSend &&
+                    terminalStates.includes(recharge.state);
+  const canStop   = isActive && canSend;
   document.getElementById('btnRechargeStart').disabled = !canStart;
   document.getElementById('btnRechargeStop').disabled  = !canStop;
 }
@@ -4821,13 +4865,18 @@ function rechargeHandleStatus(line) {
   // Badge de estado
   const badge = document.getElementById('rechargeStateBadge');
   const labels = {
-    IDLE:       '● Aguardando',
-    RUNNING:    '⚡ Recarregando',
-    TAPERING:   '🔽 Finalizando',
-    DONE:       '✅ Completo',
-    TIMEOUT:    '⏱ Timeout',
-    SATURATED:  '⚠️ Saturado',
-    SENSOR_ERR: '❌ Erro sensor',
+    IDLE:          '● Aguardando',
+    RUNNING:       '⚡ Recarregando',
+    TAPERING:      '🔽 Finalizando',
+    DONE:          '✅ Completo',
+    TIMEOUT:       '⏱ Timeout',
+    SATURATED:     '⚠️ Saturado',
+    SENSOR_ERR:    '❌ Erro sensor',
+    ABORTED:       '⛔ Abortado',
+    NO_DEVICE:     '○ Sem dispositivo',
+    DETECTING:     '🔍 Detectando',
+    SKIP_FULL:     '✓ Já carregado',
+    SKIP_LEVEL_OK: '✓ Nível OK',
   };
   badge.textContent = labels[state] || state;
   badge.className = 'recharge-state-badge ' + state.toLowerCase();
@@ -4842,6 +4891,7 @@ function rechargeHandleStatus(line) {
     TIMEOUT:    '⏱ Timeout — recarga encerrada.',
     SATURATED:  '⚠️ Sensor saturado — bomba desligada.',
     SENSOR_ERR: '❌ Erro de sensor — recarga abortada.',
+    ABORTED:    '⛔ Recarga interrompida.',
   };
   if (terminalMsg[state]) {
     if (state === 'DONE' || state === 'SATURATED') {
@@ -5301,6 +5351,7 @@ window.addEventListener('load', async () => {
   try { buildReaderGrid(); } catch(e) { console.warn('buildReaderGrid:', e); }
   try { initChart(); }      catch(e) { console.warn('initChart (Chart.js):', e); }
   setLanguage(localStorage.getItem('otb-lang') || 'pt');
+  standaloneLoad();
 
   document.getElementById('historyStart')?.addEventListener('change', historyRenderList);
   document.getElementById('historyEnd')?.addEventListener('change', historyRenderList);
