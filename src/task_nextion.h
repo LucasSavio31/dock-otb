@@ -58,6 +58,7 @@
 //   tDuty(4) duty% atual
 // =========================
 #define NEXTION_PAGE_TESTES_MANUAIS  14   // ajuste se necessario
+#define NEXTION_PAGE_ANAM_REC_NX      NEXTION_PAGE_ANAM_REC  // alias local = 7
 #define NX_TM_M0    6   // toggle valvula 1
 #define NX_TM_M1    9   // toggle valvula 2
 #define NX_TM_M2   10   // toggle valvula 3
@@ -122,10 +123,11 @@ static const char* _rechargeStatusTexto(RechargeInfo::Status status) {
 }
 
 // Estado de tracking de pagina e valvulas (testes_manuais)
-static uint8_t _pageAtual   = 0xFF;
-static bool    _val1Aberta  = false;
-static bool    _val2Aberta  = false;
-static bool    _val3Aberta  = false;
+static uint8_t _pageAtual       = 0xFF;
+static bool    _val1Aberta      = false;
+static bool    _val2Aberta      = false;
+static bool    _val3Aberta      = false;
+static bool    _rechargeAtivo   = false;  // controla transições de tela de recarga
 
 // ── Dock_status: componentes por slot de cartucho ─────────────────────────
 // readers NFC 3/4/5 = cartuchos Vermelho/Azul/Verde (gTagReaders[c+3])
@@ -557,6 +559,17 @@ static void _dockStatusAtualizar() {
 static void _processarTouch(uint8_t page, uint8_t compID, uint8_t event) {
   if (event != 0x01) return;
 
+  // ── Pagina anam_rec (tela 7): botão de emergência m0 ────
+  if (page == NEXTION_PAGE_ANAM_REC) {
+    // compID 0 = m0 (botão de parada de emergência)
+    RechargeCmd sc{};
+    sc.type = RechargeCmd::STOP;
+    xQueueSend(qRechargeCmd, &sc, 0);
+    Serial.println("[Nextion] EMERGENCIA: recarga interrompida via m0 na tela 7");
+    logdbPublishf("Nextion", "Emergencia", LOG_WARN, "Parada emergencia recarga (m0 p7)");
+    return;
+  }
+
   // ── Pagina erros/controle ────────────────────────────────
   if (page == NEXTION_PAGE_CONTROLS) {
     ActCmd cmd;
@@ -613,6 +626,33 @@ static void _processarTouch(uint8_t page, uint8_t compID, uint8_t event) {
 }
 
 // =========================
+// TELA 7 — anam_rec
+// Preenche os campos da tela de recarga em andamento.
+// Chamado uma vez ao iniciar a recarga e não durante o ciclo.
+// =========================
+static void _preencherAnamRec(const RechargeInfo &ri) {
+  char buf[32];
+  // t6 = ID da caneta
+  _setText("t6", ri.penId[0] ? ri.penId : "---");
+  // t0 = posição (1/2/3)
+  snprintf(buf, sizeof(buf), "%u", (unsigned)(ri.channel + 1));
+  _setText("t0", buf);
+  // t1 = leitor (mesmo índice da posição para canetas 1/2/3)
+  _setText("t1", buf);
+  // t2 = serial da caneta
+  _setText("t2", ri.penSerial[0] ? ri.penSerial : "---");
+  // t3 = ciclos da caneta
+  snprintf(buf, sizeof(buf), "%u", ri.penCiclos);
+  _setText("t3", buf);
+  // t4 = ID do cartucho
+  _setText("t4", ri.cartId[0] ? ri.cartId : "---");
+  // t5 = serial do cartucho
+  _setText("t5", ri.cartSerial[0] ? ri.cartSerial : "---");
+  // j0 = nível atual (0-100%)
+  _setValue("j0", (uint32_t)_nxClamp(ri.levelPct, 0.0f, 100.0f));
+}
+
+// =========================
 // TASK NEXTION
 // Core 1, prioridade 2
 // =========================
@@ -652,8 +692,37 @@ void taskNextion(void *param) {
     if (millis() - ultimoRefresh >= 2000) {
       ultimoRefresh = millis();
 
+      // ── Gerencia transições de tela de recarga (anam_rec) ───
+      RechargeInfo ri = {};
+      if (mutexRecharge && xSemaphoreTake(mutexRecharge, pdMS_TO_TICKS(10)) == pdTRUE) {
+        ri = gRecharge;
+        xSemaphoreGive(mutexRecharge);
+      }
+      bool rechargeAtivo = (ri.status == RechargeInfo::RUNNING ||
+                            ri.status == RechargeInfo::TAPERING);
+
+      if (rechargeAtivo && !_rechargeAtivo) {
+        // Recarga iniciou → navega para tela 7 e preenche campos
+        _nextionCmd("page 7");
+        vTaskDelay(pdMS_TO_TICKS(150));
+        _preencherAnamRec(ri);
+      } else if (!rechargeAtivo && _rechargeAtivo) {
+        // Recarga terminou → volta para dock_status
+        vTaskDelay(pdMS_TO_TICKS(1500));
+        _nextionCmd("page 1");
+        vTaskDelay(pdMS_TO_TICKS(200));
+        _nextionCmd("sendme");
+      } else if (rechargeAtivo && _pageAtual == NEXTION_PAGE_ANAM_REC) {
+        // Atualiza j0 com o nível atual durante a recarga
+        _setValue("j0", (uint32_t)_nxClamp(ri.levelPct, 0.0f, 100.0f));
+      }
+      _rechargeAtivo = rechargeAtivo;
+
+      // ── Refresh periódico das demais telas ──────────────────
       bool naDock = (_dockPageId != 0xFF && _pageAtual == _dockPageId);
-      if (naDock) {
+      if (_pageAtual == NEXTION_PAGE_ANAM_REC) {
+        // Tela 7 gerenciada acima; não sobrescreve
+      } else if (naDock) {
         _enviarDockScreen();
         _dockStatusAtualizar();
       } else if (_pageAtual == NEXTION_PAGE_TESTES_MANUAIS) {

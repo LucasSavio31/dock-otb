@@ -700,10 +700,15 @@ void taskNFC(void *param) {
               memcmp(uid, gCartBind[si].uid, uidLen) == 0) {
             detectou = true;
           } else {
+            // HALT a tag errada (ISO14443A 0x50) — para de responder a REQA
             uint8_t haltCmd[2] = {0x50, 0x00};
             uint8_t haltResp[2];
             uint8_t haltRespLen = sizeof(haltResp);
             nfcReaders[r]->inDataExchange(haltCmd, 2, haltResp, &haltRespLen);
+            // InRelease libera o slot Tg=1 no PN532 — sem isso o próximo
+            // InListPassiveTarget tenta re-contactar a tag HALT'd e falha
+            uint8_t releaseCmd[2] = {PN532_COMMAND_INRELEASE, 0x01};
+            nfcReaders[r]->sendCommandCheckAck(releaseCmd, 2, 50);
             vTaskDelay(pdMS_TO_TICKS(5));
           }
         }

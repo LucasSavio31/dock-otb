@@ -248,6 +248,27 @@ void taskRecarga(void *param) {
                     "Pos=%u nivel=%.1f%% — iniciando recarga.", (unsigned)(ch + 1), levelPct);
       erroClear(ERR_E301);
 
+      // Captura dados de caneta e cartucho para a tela anam_rec
+      RechargeInfo ri = {};
+      ri.status   = RechargeInfo::RUNNING;
+      ri.channel  = ch;
+      ri.levelPct = levelPct;
+      ri.dutyPct  = RECHARGE_DUTY_FILL;
+      ri.elapsedMs = 0;
+      if (xSemaphoreTake(mutexTag, pdMS_TO_TICKS(30)) == pdTRUE) {
+        snprintf(ri.penId,      sizeof(ri.penId),      "%s", gTagReaders[ch].data.id);
+        snprintf(ri.penSerial,  sizeof(ri.penSerial),  "%s", gTagReaders[ch].data.serial);
+        ri.penCiclos = gTagReaders[ch].data.ciclos;
+        uint8_t rc = ch + 3;
+        snprintf(ri.cartId,     sizeof(ri.cartId),     "%s", gTagReaders[rc].data.id);
+        snprintf(ri.cartSerial, sizeof(ri.cartSerial), "%s", gTagReaders[rc].data.serial);
+        xSemaphoreGive(mutexTag);
+      }
+      if (xSemaphoreTake(mutexRecharge, pdMS_TO_TICKS(10)) == pdTRUE) {
+        gRecharge = ri;
+        xSemaphoreGive(mutexRecharge);
+      }
+
       // Abre válvula correspondente à posição
       _rechargeControl(ControleCmd::VALVULA_ON, ch + 1);
       vTaskDelay(pdMS_TO_TICKS(300));
@@ -261,11 +282,6 @@ void taskRecarga(void *param) {
       bool     tapered     = false;
       bool     success     = false;
       uint8_t  duty        = RECHARGE_DUTY_FILL;
-
-      if (xSemaphoreTake(mutexRecharge, pdMS_TO_TICKS(10)) == pdTRUE) {
-        gRecharge = { RechargeInfo::RUNNING, ch, levelPct, duty, 0 };
-        xSemaphoreGive(mutexRecharge);
-      }
       Serial.printf("RECHARGE_STATUS:%d,%.1f,%d,RUNNING\n", ch, levelPct, duty);
 
       // ── Malha de controle ────────────────────────────────
@@ -383,9 +399,13 @@ void taskRecarga(void *param) {
           gRecharge.status = RechargeInfo::IDLE;
           xSemaphoreGive(mutexRecharge);
         }
+
+        // 5s entre recargas sequenciais — Nextion retorna à dock_status neste período
+        vTaskDelay(pdMS_TO_TICKS(5000));
+        continue; // pula o vTaskDelay(500) abaixo
       }
 
-      vTaskDelay(pdMS_TO_TICKS(500)); // pausa entre posições
+      vTaskDelay(pdMS_TO_TICKS(500)); // pausa curta entre posições sem recarga
     }
 
     // Aguarda antes da próxima varredura completa

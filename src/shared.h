@@ -3,7 +3,7 @@
 //  shared.h - V5
 //  Tipos, handles globais e estado compartilhado
 // =============================================================
-#define FIRMWARE_VERSION "V2.0.5"
+#define FIRMWARE_VERSION "V2.1.0"
 #include <Arduino.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
@@ -121,12 +121,21 @@ struct RechargeCmd {
   uint8_t channel; // 0-2
 };
 
+// Número da página Nextion da tela de recarga em andamento
+#define NEXTION_PAGE_ANAM_REC  7
+
 struct RechargeInfo {
   enum Status : uint8_t { IDLE, RUNNING, TAPERING, DONE, TIMEOUT, SATURATED, SENSOR_ERR } status;
-  uint8_t channel;
-  float   levelPct;
-  uint8_t dutyPct;
+  uint8_t  channel;
+  float    levelPct;
+  uint8_t  dutyPct;
   uint32_t elapsedMs;
+  // Dados exibidos na página anam_rec (tela 7) durante a recarga
+  char     penId[17];
+  char     penSerial[17];
+  uint16_t penCiclos;
+  char     cartId[17];
+  char     cartSerial[17];
 };
 extern QueueHandle_t     qRechargeCmd;
 extern RechargeInfo      gRecharge;
