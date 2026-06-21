@@ -127,7 +127,8 @@ static uint8_t _pageAtual       = 0xFF;
 static bool    _val1Aberta      = false;
 static bool    _val2Aberta      = false;
 static bool    _val3Aberta      = false;
-static bool    _rechargeAtivo   = false;  // controla transições de tela de recarga
+static bool    _rechargeAtivo       = false;  // controla transições de tela de recarga
+static bool    _rechargeDataFilled  = false;  // true quando campos de texto já foram enviados com dados reais
 
 // ── Dock_status: componentes por slot de cartucho ─────────────────────────
 // readers NFC 3/4/5 = cartuchos Vermelho/Azul/Verde (gTagReaders[c+3])
@@ -703,10 +704,12 @@ void taskNextion(void *param) {
                             ri.status == RechargeInfo::DETECTING);
 
       if (rechargeAtivo && !_rechargeAtivo) {
-        // Caneta detectada (ou recarga iniciando) → navega para tela 7
+        // Caneta detectada → navega para tela 7
         _nextionCmd("page 7");
         vTaskDelay(pdMS_TO_TICKS(150));
         _preencherAnamRec(ri);
+        // Marca se os dados reais já estão disponíveis (RUNNING/TAPERING têm penId preenchido)
+        _rechargeDataFilled = (ri.status != RechargeInfo::DETECTING);
       } else if (!rechargeAtivo && _rechargeAtivo) {
         // Recarga terminou — ABORTED: retorno imediato; outros: 1.5 s
         if (ri.status != RechargeInfo::ABORTED) {
@@ -715,9 +718,18 @@ void taskNextion(void *param) {
         _nextionCmd("page 1");
         vTaskDelay(pdMS_TO_TICKS(200));
         _nextionCmd("sendme");
+        _rechargeDataFilled = false;
       } else if (rechargeAtivo && _pageAtual == NEXTION_PAGE_ANAM_REC) {
-        // Atualiza j0 com o nível atual durante a recarga
-        _setValue("j0", (uint32_t)_nxClamp(ri.levelPct, 0.0f, 100.0f));
+        if (!_rechargeDataFilled &&
+            ri.status != RechargeInfo::DETECTING &&
+            ri.penId[0] != '\0') {
+          // Dados da caneta/cartucho agora disponíveis (RUNNING): preenche todos os campos
+          _preencherAnamRec(ri);
+          _rechargeDataFilled = true;
+        } else {
+          // Apenas atualiza barra de nível
+          _setValue("j0", (uint32_t)_nxClamp(ri.levelPct, 0.0f, 100.0f));
+        }
       }
       _rechargeAtivo = rechargeAtivo;
 
