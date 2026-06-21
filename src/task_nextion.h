@@ -560,14 +560,21 @@ static void _dockStatusAtualizar() {
 static void _processarTouch(uint8_t page, uint8_t compID, uint8_t event) {
   if (event != 0x01) return;
 
-  // ── Pagina anam_rec (tela 7): botão de emergência m0 ────
+  // ── Pagina anam_rec (tela 7): botão m0 (ID=4) = PARADA DE EMERGÊNCIA ────
   if (page == NEXTION_PAGE_ANAM_REC) {
-    // compID 0 = m0 (botão de parada de emergência)
+    if (compID != 4) return; // ignora outros toques na tela 7
     RechargeCmd sc{};
     sc.type = RechargeCmd::STOP;
     xQueueSend(qRechargeCmd, &sc, 0);
-    Serial.println("[Nextion] EMERGENCIA: recarga interrompida via m0 na tela 7");
-    logdbPublishf("Nextion", "Emergencia", LOG_WARN, "Parada emergencia recarga (m0 p7)");
+    Serial.println("[Nextion] EMERGENCIA: recarga interrompida via m0 (ID=4)");
+    logdbPublishf("Nextion", "Emergencia", LOG_WARN, "Parada emergencia m0 p7");
+    // Aguarda 2s e retorna à tela inicial
+    vTaskDelay(pdMS_TO_TICKS(2000));
+    _nextionCmd("page 1");
+    vTaskDelay(pdMS_TO_TICKS(200));
+    _nextionCmd("sendme");
+    _rechargeAtivo      = false;
+    _rechargeDataFilled = false;
     return;
   }
 
@@ -628,27 +635,35 @@ static void _processarTouch(uint8_t page, uint8_t compID, uint8_t event) {
 
 // =========================
 // TELA 7 — anam_rec
-// Preenche os campos da tela de recarga em andamento.
-// Chamado uma vez ao iniciar a recarga e não durante o ciclo.
+// Mapeamento de componentes (nome Nextion → conteúdo):
+//   t1 (ID 5)  = ID Caneta
+//   t2 (ID 6)  = Posição (1/2/3)
+//   t3 (ID 7)  = Leitor  (1/2/3)
+//   t4 (ID 8)  = Série da caneta
+//   t5 (ID 9)  = Ciclos da caneta
+//   t6 (ID 10) = ID Cartucho
+//   t7 (ID 11) = Série do cartucho
+//   j0         = barra de nível (0-100)
+//   m0 (ID 4)  = botão PARADA DE EMERGÊNCIA
 // =========================
 static void _preencherAnamRec(const RechargeInfo &ri) {
   char buf[32];
-  // t6 = ID da caneta
-  _setText("t6", ri.penId[0] ? ri.penId : "---");
-  // t0 = posição (1/2/3)
+  // t1 = ID da caneta
+  _setText("t1", ri.penId[0] ? ri.penId : "---");
+  // t2 = posição (canal 0→1, 1→2, 2→3)
   snprintf(buf, sizeof(buf), "%u", (unsigned)(ri.channel + 1));
-  _setText("t0", buf);
-  // t1 = leitor (mesmo índice da posição para canetas 1/2/3)
-  _setText("t1", buf);
-  // t2 = serial da caneta
-  _setText("t2", ri.penSerial[0] ? ri.penSerial : "---");
-  // t3 = ciclos da caneta
-  snprintf(buf, sizeof(buf), "%u", ri.penCiclos);
+  _setText("t2", buf);
+  // t3 = leitor (mesmo número da posição para canetas 1/2/3)
   _setText("t3", buf);
-  // t4 = ID do cartucho
-  _setText("t4", ri.cartId[0] ? ri.cartId : "---");
-  // t5 = serial do cartucho
-  _setText("t5", ri.cartSerial[0] ? ri.cartSerial : "---");
+  // t4 = serial da caneta
+  _setText("t4", ri.penSerial[0] ? ri.penSerial : "---");
+  // t5 = ciclos da caneta
+  snprintf(buf, sizeof(buf), "%u", ri.penCiclos);
+  _setText("t5", buf);
+  // t6 = ID do cartucho
+  _setText("t6", ri.cartId[0] ? ri.cartId : "---");
+  // t7 = serial do cartucho
+  _setText("t7", ri.cartSerial[0] ? ri.cartSerial : "---");
   // j0 = nível atual (0-100%)
   _setValue("j0", (uint32_t)_nxClamp(ri.levelPct, 0.0f, 100.0f));
 }
@@ -679,6 +694,8 @@ void taskNextion(void *param) {
   uint32_t ultimoRefresh  = 0;
   uint32_t ultimoSendme   = 0;
   uint32_t ultimoBlink    = 0;
+  uint32_t ultimoRecFast  = 0;  // refresh rápido da tela 7 (j0, 300 ms)
+  uint32_t ultimoRec1s    = 0;  // refresh completo da tela 7 (t1-t7, 1 s)
   TagEvent ev;
 
   for (;;) {
@@ -689,11 +706,10 @@ void taskNextion(void *param) {
       continue;
     }
 
-    // ── Refresh periodico a cada 2s ───────────────────────
-    if (millis() - ultimoRefresh >= 2000) {
-      ultimoRefresh = millis();
+    // ── Refresh completo dos campos da tela 7 a cada 1 s ─────────
+    if (millis() - ultimoRec1s >= 1000) {
+      ultimoRec1s = millis();
 
-      // ── Gerencia transições de tela de recarga (anam_rec) ───
       RechargeInfo ri = {};
       if (mutexRecharge && xSemaphoreTake(mutexRecharge, pdMS_TO_TICKS(10)) == pdTRUE) {
         ri = gRecharge;
@@ -704,12 +720,13 @@ void taskNextion(void *param) {
                             ri.status == RechargeInfo::DETECTING);
 
       if (rechargeAtivo && !_rechargeAtivo) {
-        // Caneta detectada → navega para tela 7
+        // Caneta detectada → navega para tela 7 e preenche imediatamente
         _nextionCmd("page 7");
-        vTaskDelay(pdMS_TO_TICKS(150));
+        vTaskDelay(pdMS_TO_TICKS(250)); // espera Nextion carregar a página
         _preencherAnamRec(ri);
-        // Marca se os dados reais já estão disponíveis (RUNNING/TAPERING têm penId preenchido)
         _rechargeDataFilled = (ri.status != RechargeInfo::DETECTING);
+        _nextionCmd("sendme"); // atualiza _pageAtual para 7 rapidamente
+
       } else if (!rechargeAtivo && _rechargeAtivo) {
         // Recarga terminou — ABORTED: retorno imediato; outros: 1.5 s
         if (ri.status != RechargeInfo::ABORTED) {
@@ -719,24 +736,27 @@ void taskNextion(void *param) {
         vTaskDelay(pdMS_TO_TICKS(200));
         _nextionCmd("sendme");
         _rechargeDataFilled = false;
+
       } else if (rechargeAtivo && _pageAtual == NEXTION_PAGE_ANAM_REC) {
-        if (!_rechargeDataFilled &&
-            ri.status != RechargeInfo::DETECTING &&
-            ri.penId[0] != '\0') {
-          // Dados da caneta/cartucho agora disponíveis (RUNNING): preenche todos os campos
+        // Reescreve todos os campos a cada 1 s — recupera comandos perdidos
+        if (ri.status != RechargeInfo::DETECTING && ri.penId[0] != '\0') {
           _preencherAnamRec(ri);
           _rechargeDataFilled = true;
         } else {
-          // Apenas atualiza barra de nível
+          // Ainda em DETECTING: só atualiza barra de nível
           _setValue("j0", (uint32_t)_nxClamp(ri.levelPct, 0.0f, 100.0f));
         }
       }
       _rechargeAtivo = rechargeAtivo;
+    }
 
-      // ── Refresh periódico das demais telas ──────────────────
+    // ── Refresh periódico das demais telas a cada 2 s ─────────────
+    if (millis() - ultimoRefresh >= 2000) {
+      ultimoRefresh = millis();
+
       bool naDock = (_dockPageId != 0xFF && _pageAtual == _dockPageId);
       if (_pageAtual == NEXTION_PAGE_ANAM_REC) {
-        // Tela 7 gerenciada acima; não sobrescreve
+        // Tela 7 gerenciada pelo bloco de 1 s acima; não sobrescreve
       } else if (naDock) {
         _enviarDockScreen();
         _dockStatusAtualizar();
@@ -747,6 +767,21 @@ void taskNextion(void *param) {
         _enviarErros();
         _atualizarLeitores();
       }
+    }
+
+    // ── Refresh rápido da tela 7: nível + duty a cada 300 ms ───────────
+    if (_rechargeAtivo && _pageAtual == NEXTION_PAGE_ANAM_REC &&
+        millis() - ultimoRecFast >= 300) {
+      ultimoRecFast = millis();
+      float   lvl  = 0.0f;
+      uint8_t duty = 0;
+      if (mutexRecharge && xSemaphoreTake(mutexRecharge, pdMS_TO_TICKS(10)) == pdTRUE) {
+        lvl  = gRecharge.levelPct;
+        duty = gRecharge.dutyPct;
+        xSemaphoreGive(mutexRecharge);
+      }
+      _setValue("j0", (uint32_t)_nxClamp(lvl, 0.0f, 100.0f));
+      (void)duty; // sem componente de duty mapeado na tela 7 ainda
     }
 
     // ── sendme a cada 5s para rastrear pagina atual ───────
