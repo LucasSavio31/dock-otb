@@ -41,8 +41,8 @@ SemaphoreHandle_t mutexRecharge = nullptr;
 #define RECHARGE_LEVEL_DONE      85.0f   // nível de conclusão
 #define RECHARGE_DUTY_FILL       85      // duty inicial (%)
 #define RECHARGE_DUTY_TAPER      40      // duty reduzido após 50 % (%)
-#define RECHARGE_STABILIZE_MS    5000    // estabilização antes de checar nível (ms)
-#define RECHARGE_CYCLE_IDLE_MS    2000   // pausa entre varreduras completas (ms)
+#define RECHARGE_STABILIZE_MS    1000    // estabilização antes de checar nível (ms)
+#define RECHARGE_CYCLE_IDLE_MS    300    // pausa entre varreduras completas (ms)
 #define TAG_STATUS_INATIVO       5       // status de tag inativa (vida = 0)
 
 // ── Helpers internos ─────────────────────────────────────────
@@ -227,27 +227,35 @@ void taskRecarga(void *param) {
     // ── Varredura posições ─────────────────────────────────────
     for (uint8_t ch = chStart; ch < chEnd; ch++) {
 
-      // ── 0. WAIT_RESET: verifica gesto físico sem bloquear ─
+      // ── 0. WAIT_RESET: modo manual exige gesto físico; standalone retoma direto ─
       if (_waitReset[ch]) {
-        bool penPresente = false, sensorOk = false;
-        if (xSemaphoreTake(mutexTag, pdMS_TO_TICKS(20)) == pdTRUE) {
-          penPresente = gTagReaders[ch].presente;
-          xSemaphoreGive(mutexTag);
-        }
-        if (xSemaphoreTake(mutexNivel, pdMS_TO_TICKS(20)) == pdTRUE) {
-          sensorOk = gNivel[ch].leituraOk;
-          xSemaphoreGive(mutexNivel);
-        }
-        if (!penPresente) _penRemovidaFlag[ch] = true;
-        if (!sensorOk)    _sensorOffFlag[ch]   = true;
-        if ((_penRemovidaFlag[ch] && penPresente) || (_sensorOffFlag[ch] && sensorOk)) {
+        if (gOpMode == OP_STANDALONE) {
+          // Standalone: já expirou o cooldown (5s no vTaskDelay abaixo), só limpa flag
           _waitReset[ch]       = false;
           _penRemovidaFlag[ch] = false;
           _sensorOffFlag[ch]   = false;
-          Serial.printf("[Recarga] Pos %u: reset — iniciando novo ciclo.\n", ch + 1);
-          // fall-through: continua para detecção normal neste mesmo ciclo
         } else {
-          continue; // aguardando — verifica próxima posição
+          // Manual: exige remoção+reinserção física antes de novo ciclo
+          bool penPresente = false, sensorOk = false;
+          if (xSemaphoreTake(mutexTag, pdMS_TO_TICKS(20)) == pdTRUE) {
+            penPresente = gTagReaders[ch].presente;
+            xSemaphoreGive(mutexTag);
+          }
+          if (xSemaphoreTake(mutexNivel, pdMS_TO_TICKS(20)) == pdTRUE) {
+            sensorOk = gNivel[ch].leituraOk;
+            xSemaphoreGive(mutexNivel);
+          }
+          if (!penPresente) _penRemovidaFlag[ch] = true;
+          if (!sensorOk)    _sensorOffFlag[ch]   = true;
+          if ((_penRemovidaFlag[ch] && penPresente) || (_sensorOffFlag[ch] && sensorOk)) {
+            _waitReset[ch]       = false;
+            _penRemovidaFlag[ch] = false;
+            _sensorOffFlag[ch]   = false;
+            Serial.printf("[Recarga] Pos %u: reset manual — iniciando novo ciclo.\n", ch + 1);
+            // fall-through para detecção normal
+          } else {
+            continue; // aguardando gesto — verifica próxima posição
+          }
         }
       }
 
@@ -285,8 +293,15 @@ void taskRecarga(void *param) {
           gRecharge.status = RechargeInfo::ABORTED;
           xSemaphoreGive(mutexRecharge);
         }
-        // Só aguarda reset físico quando foi emergência (STOP) — falhas naturais reiniciam direto
-        if (stopPressed) _ativarWaitReset(ch);
+        // Emergência (STOP): cooldown por modo
+        if (stopPressed) {
+          if (gOpMode == OP_MANUAL) {
+            _ativarWaitReset(ch);
+          } else {
+            Serial.printf("RECHARGE_STATUS:%d,0,0,WAIT_RESET\n", ch);
+            vTaskDelay(pdMS_TO_TICKS(5000));
+          }
+        }
         continue;
       }
 
@@ -500,9 +515,17 @@ void taskRecarga(void *param) {
         continue; // pula o vTaskDelay(500) abaixo
       }
 
-      // ABORTED (emergência) ou SENSOR_ERR: aguarda reset físico antes do próximo ciclo
+      // ABORTED (emergência) ou SENSOR_ERR: cooldown antes do próximo ciclo
       if (state == RechargeInfo::ABORTED || state == RechargeInfo::SENSOR_ERR) {
-        _ativarWaitReset(ch);
+        if (gOpMode == OP_MANUAL) {
+          _ativarWaitReset(ch); // manual: exige gesto físico
+        } else {
+          // Standalone: cooldown 5s para caneta estabilizar, depois retoma direto
+          Serial.printf("RECHARGE_STATUS:%d,0,0,WAIT_RESET\n", ch);
+          vTaskDelay(pdMS_TO_TICKS(5000));
+          _waitReset[ch] = true; // marcado para ser limpo no próximo ciclo imediatamente
+          Serial.printf("[Recarga] Pos %u: cooldown concluído — retomando detecção.\n", ch + 1);
+        }
       }
       vTaskDelay(pdMS_TO_TICKS(500)); // pausa curta entre posições sem recarga
     }
