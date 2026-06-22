@@ -39,7 +39,7 @@ SemaphoreHandle_t mutexRecharge = nullptr;
 #define RECHARGE_LEVEL_SKIP      60.0f   // nível bom: acima → pula
 #define RECHARGE_LEVEL_TAPER     50.0f   // ponto de redução de duty
 #define RECHARGE_LEVEL_DONE      85.0f   // nível de conclusão
-#define RECHARGE_DUTY_FILL       85      // duty inicial (%)
+#define RECHARGE_DUTY_FILL       70      // duty inicial (%)
 #define RECHARGE_DUTY_TAPER      40      // duty reduzido após 50 % (%)
 #define RECHARGE_STABILIZE_MS    1000    // estabilização antes de checar nível (ms)
 #define RECHARGE_CYCLE_IDLE_MS    300    // pausa entre varreduras completas (ms)
