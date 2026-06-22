@@ -263,14 +263,16 @@ void taskRecarga(void *param) {
         gRecharge.levelPct = levelPct;
         xSemaphoreGive(mutexRecharge);
       }
-      bool stable = true;
+      bool stable      = true;
+      bool stopPressed = false; // true = abort por STOP (emergência), false = natural
       for (uint32_t t = 0; t < RECHARGE_STABILIZE_MS && stable; t += 500) {
         vTaskDelay(pdMS_TO_TICKS(500));
         if (!_posicaoApta(ch, &levelPct)) { stable = false; break; }
         RechargeCmd sc;
         if (xQueuePeek(qRechargeCmd, &sc, 0) == pdTRUE && sc.type == RechargeCmd::STOP) {
           xQueueReceive(qRechargeCmd, &sc, 0);
-          stable = false;
+          stable      = false;
+          stopPressed = true;
         }
       }
       if (!stable) {
@@ -278,7 +280,8 @@ void taskRecarga(void *param) {
           gRecharge.status = RechargeInfo::ABORTED;
           xSemaphoreGive(mutexRecharge);
         }
-        _aguardarResetPos(ch); // aguarda remoção+reinserção antes de novo ciclo
+        // Só aguarda reset físico quando foi emergência (STOP) — falhas naturais reiniciam direto
+        if (stopPressed) _aguardarResetPos(ch);
         continue;
       }
 
@@ -455,11 +458,6 @@ void taskRecarga(void *param) {
       }
 
       // ── 5. Pós-recarga ────────────────────────────────────
-      // Saída sem sucesso (emergência, timeout, sensor): bloqueia até reset físico
-      if (!success) {
-        _aguardarResetPos(ch);
-      }
-
       if (success) {
         _rechargeIncrementPersistentCount();
         gRechargeCount++;
@@ -497,6 +495,10 @@ void taskRecarga(void *param) {
         continue; // pula o vTaskDelay(500) abaixo
       }
 
+      // ABORTED (emergência) ou SENSOR_ERR: aguarda reset físico antes do próximo ciclo
+      if (state == RechargeInfo::ABORTED || state == RechargeInfo::SENSOR_ERR) {
+        _aguardarResetPos(ch);
+      }
       vTaskDelay(pdMS_TO_TICKS(500)); // pausa curta entre posições sem recarga
     }
 
