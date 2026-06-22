@@ -133,7 +133,7 @@ static bool    _rechargeDataFilled  = false;  // true quando campos de texto já
 // ── Dock_status: componentes por slot de cartucho ─────────────────────────
 // readers NFC 3/4/5 = cartuchos Vermelho/Azul/Verde (gTagReaders[c+3])
 static const char* _dsPic[]   = { "p2",  "p3",  "p4"  };
-static const int   _dsPicOk[] = {  8,     6,     5    };   // pic quando presente
+static const int   _dsPicOk[] = {  8,     6,     29   };   // pic quando presente
 static const char* _dsLA[]    = { "t2",  "t6",  "t10" };   // label A (vis)
 static const char* _dsLB[]    = { "t3",  "t7",  "t11" };   // label B (vis)
 static const char* _dsSer[]   = { "t5",  "t8",  "t12" };   // serial
