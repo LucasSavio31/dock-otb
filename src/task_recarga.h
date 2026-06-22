@@ -188,38 +188,19 @@ static bool _posicaoApta(uint8_t ch, float *outLevel) {
   return true;
 }
 
-// Bloqueia até que operador remova e reinsira a caneta (NFC) OU o sensor (FDC/I2C).
-// Chamado após ABORTED para impedir reinício automático sem interação física.
-static void _aguardarResetPos(uint8_t ch) {
+// Estado WAIT_RESET por canal — não-bloqueante: permite que outras posições continuem
+// sendo verificadas enquanto uma posição aguarda o gesto de remoção+reinserção.
+static bool _waitReset[3]       = {false, false, false};
+static bool _penRemovidaFlag[3] = {false, false, false};
+static bool _sensorOffFlag[3]   = {false, false, false};
+
+static void _ativarWaitReset(uint8_t ch) {
+  _waitReset[ch]       = true;
+  _penRemovidaFlag[ch] = false;
+  _sensorOffFlag[ch]   = false;
   Serial.printf("RECHARGE_STATUS:%d,0,0,WAIT_RESET\n", ch);
   logdbPublishf("Recarga", "AguardaReset", LOG_WARN,
                 "Pos=%u aguardando remoção+reinserção para novo ciclo.", (unsigned)(ch + 1));
-  bool penRemovida   = false;
-  bool sensorOffline = false;
-
-  for (;;) {
-    if (gBloqueado) return;
-    vTaskDelay(pdMS_TO_TICKS(300));
-
-    bool penPresente = false, sensorOk = false;
-    if (xSemaphoreTake(mutexTag, pdMS_TO_TICKS(20)) == pdTRUE) {
-      penPresente = gTagReaders[ch].presente;
-      xSemaphoreGive(mutexTag);
-    }
-    if (xSemaphoreTake(mutexNivel, pdMS_TO_TICKS(20)) == pdTRUE) {
-      sensorOk = gNivel[ch].leituraOk;
-      xSemaphoreGive(mutexNivel);
-    }
-
-    if (!penPresente) penRemovida   = true;
-    if (!sensorOk)    sensorOffline = true;
-
-    // Pronto quando: caneta foi removida e voltou, OU sensor foi offline e voltou
-    if ((penRemovida && penPresente) || (sensorOffline && sensorOk)) {
-      Serial.printf("[Recarga] Pos %u: reset — iniciando novo ciclo.\n", ch + 1);
-      return;
-    }
-  }
 }
 
 // ── Task ──────────────────────────────────────────────────────
@@ -245,6 +226,30 @@ void taskRecarga(void *param) {
 
     // ── Varredura posições ─────────────────────────────────────
     for (uint8_t ch = chStart; ch < chEnd; ch++) {
+
+      // ── 0. WAIT_RESET: verifica gesto físico sem bloquear ─
+      if (_waitReset[ch]) {
+        bool penPresente = false, sensorOk = false;
+        if (xSemaphoreTake(mutexTag, pdMS_TO_TICKS(20)) == pdTRUE) {
+          penPresente = gTagReaders[ch].presente;
+          xSemaphoreGive(mutexTag);
+        }
+        if (xSemaphoreTake(mutexNivel, pdMS_TO_TICKS(20)) == pdTRUE) {
+          sensorOk = gNivel[ch].leituraOk;
+          xSemaphoreGive(mutexNivel);
+        }
+        if (!penPresente) _penRemovidaFlag[ch] = true;
+        if (!sensorOk)    _sensorOffFlag[ch]   = true;
+        if ((_penRemovidaFlag[ch] && penPresente) || (_sensorOffFlag[ch] && sensorOk)) {
+          _waitReset[ch]       = false;
+          _penRemovidaFlag[ch] = false;
+          _sensorOffFlag[ch]   = false;
+          Serial.printf("[Recarga] Pos %u: reset — iniciando novo ciclo.\n", ch + 1);
+          // fall-through: continua para detecção normal neste mesmo ciclo
+        } else {
+          continue; // aguardando — verifica próxima posição
+        }
+      }
 
       // ── 1. Detecção: sensor I2C + caneta NFC ─────────────
       float levelPct = 0.0f;
@@ -281,7 +286,7 @@ void taskRecarga(void *param) {
           xSemaphoreGive(mutexRecharge);
         }
         // Só aguarda reset físico quando foi emergência (STOP) — falhas naturais reiniciam direto
-        if (stopPressed) _aguardarResetPos(ch);
+        if (stopPressed) _ativarWaitReset(ch);
         continue;
       }
 
@@ -497,7 +502,7 @@ void taskRecarga(void *param) {
 
       // ABORTED (emergência) ou SENSOR_ERR: aguarda reset físico antes do próximo ciclo
       if (state == RechargeInfo::ABORTED || state == RechargeInfo::SENSOR_ERR) {
-        _aguardarResetPos(ch);
+        _ativarWaitReset(ch);
       }
       vTaskDelay(pdMS_TO_TICKS(500)); // pausa curta entre posições sem recarga
     }
